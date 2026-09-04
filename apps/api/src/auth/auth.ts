@@ -62,6 +62,22 @@ export function loadAuthSecret(environment: NodeJS.ProcessEnv = process.env): Bu
 export class AuthTokenService {
   constructor(@Inject(AUTH_SECRET) private readonly secret: Buffer) {}
 
+  issue(principal: AuthPrincipal): string {
+    const now = Math.floor(Date.now() / 1_000);
+    const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({
+      sub: principal.id,
+      roles: principal.roles,
+      projectIds: principal.projectIds,
+      iss: AUTH_ISSUER,
+      aud: AUTH_AUDIENCE,
+      iat: now,
+      exp: now + 3_600,
+    })).toString("base64url");
+    const signature = createHmac("sha256", this.secret).update(`${header}.${payload}`).digest("base64url");
+    return `${header}.${payload}.${signature}`;
+  }
+
   verify(token: string): AuthPrincipal {
     if (!token || token.length > 8_192) throw new UnauthorizedException("Invalid bearer token");
     const parts = token.split(".");

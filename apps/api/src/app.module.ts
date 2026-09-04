@@ -12,9 +12,10 @@ import { DeterministicOrchestrationService, ORCHESTRATION_SERVICE } from "./work
 import { ReleaseWorkflowService } from "./workflow/release-workflow.service.js";
 import { AUTH_SECRET, AuthGuard, AuthTokenService, loadAuthSecret } from "./auth/auth.js";
 import { ProjectAccessService } from "./auth/project-access.service.js";
+import { AuthController } from "./auth/auth.controller.js";
 
 @Module({
-  controllers: [HealthController, ReleasesController, ReadModelController, ActionsController, DeliveriesController],
+  controllers: [HealthController, AuthController, ReleasesController, ReadModelController, ActionsController, DeliveriesController],
   providers: [
     ReleaseService,
     ReleaseWorkflowService,

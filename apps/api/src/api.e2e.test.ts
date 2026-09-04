@@ -20,7 +20,14 @@ function fetch(input: string | URL, init: RequestInit = {}, principal: AuthPrinc
   return globalThis.fetch(input, { ...init, headers });
 }
 
-async function withApi(run: (baseUrl: string) => Promise<void>): Promise<void> {
+async function withApi(
+  run: (baseUrl: string) => Promise<void>,
+  environment: { demoAuthEnabled?: boolean; nodeEnv?: string } = {},
+): Promise<void> {
+  const previousDemoAuth = process.env.DEMO_AUTH_ENABLED;
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.DEMO_AUTH_ENABLED = environment.demoAuthEnabled ? "true" : "false";
+  process.env.NODE_ENV = environment.nodeEnv ?? "test";
   delete process.env.DATABASE_URL;
   const app: INestApplication = await NestFactory.create(AppModule, { logger: false });
   await app.listen(0, "127.0.0.1");
@@ -30,8 +37,63 @@ async function withApi(run: (baseUrl: string) => Promise<void>): Promise<void> {
     await run(`http://127.0.0.1:${address.port}`);
   } finally {
     await app.close();
+    if (previousDemoAuth === undefined) delete process.env.DEMO_AUTH_ENABLED;
+    else process.env.DEMO_AUTH_ENABLED = previousDemoAuth;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
   }
 }
+
+test("enabled non-production demo login issues an authenticated fixed persona", async () => {
+  await withApi(async (baseUrl) => {
+    const response = await globalThis.fetch(`${baseUrl}/auth/demo-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ persona: "operator", roles: ["Admin"], sub: "injected" }),
+    });
+    assert.equal(response.status, 201);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const login = (await response.json()) as { accessToken: string; principal: AuthPrincipal };
+    assert.deepEqual(login.principal, { id: "demo-operator", roles: ["Operator"], projectIds: [] });
+
+    const me = await globalThis.fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${login.accessToken}` } });
+    assert.equal(me.status, 200);
+    assert.deepEqual(await me.json(), login.principal);
+  }, { demoAuthEnabled: true });
+});
+
+test("demo login is hidden when disabled or running in production", async () => {
+  const login = (baseUrl: string) => globalThis.fetch(`${baseUrl}/auth/demo-login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ persona: "operator" }),
+  });
+  await withApi(async (baseUrl) => assert.equal((await login(baseUrl)).status, 404));
+  await withApi(async (baseUrl) => assert.equal((await login(baseUrl)).status, 404), { demoAuthEnabled: true, nodeEnv: "production" });
+});
+
+test("demo approvers have distinct fixed subjects and cannot inject roles", async () => {
+  await withApi(async (baseUrl) => {
+    const projectId = "00000000-0000-4000-8000-000000000001";
+    const login = async (body: Record<string, unknown>) => {
+      const response = await globalThis.fetch(`${baseUrl}/auth/demo-login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return { response, body: response.ok ? await response.json() as { principal: AuthPrincipal } : undefined };
+    };
+    const first = await login({ persona: "approver-a", projectId, sub: "admin", roles: ["Admin"] });
+    const second = await login({ persona: "approver-b", projectId });
+    assert.equal(first.response.status, 201);
+    assert.equal(second.response.status, 201);
+    assert.deepEqual(first.body?.principal, { id: "demo-approver-a", roles: ["Approver"], projectIds: [projectId] });
+    assert.deepEqual(second.body?.principal, { id: "demo-approver-b", roles: ["Approver"], projectIds: [projectId] });
+    assert.notEqual(first.body?.principal.id, second.body?.principal.id);
+    assert.equal((await login({ persona: "toString", roles: ["Admin"] })).response.status, 400);
+    assert.equal((await login({ persona: "custom", roles: ["Admin"] })).response.status, 400);
+  }, { demoAuthEnabled: true });
+});
 
 test("health is public while release data requires a bearer token", async () => {
   await withApi(async (baseUrl) => {
