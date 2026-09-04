@@ -5,9 +5,7 @@ import { cookies } from "next/headers";
 import type {
   ActionDto,
   ApprovalDto,
-  AssetDto,
   AuditEventDto,
-  CreateAssetInput,
   CreateReleaseInput,
   DeliveryAttemptDto,
   FindingDto,
@@ -17,7 +15,7 @@ import type {
   WorkflowResultDto,
 } from "@lrc/contracts";
 
-const API_BASE_URL = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+export const API_BASE_URL = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 export const AUTH_COOKIE = "lrc_session";
 
 export const authRoles = ["Operator", "Approver", "ReleaseManager", "Admin"] as const;
@@ -151,7 +149,6 @@ export const api = {
   timeline: (releaseId: string) => listRequest<TimelineEventDto>(`/releases/${encodeURIComponent(releaseId)}/timeline`, "events"),
   ruleSets: () => listRequest<RuleSetDto>("/rulesets", "rulesets"),
   createRelease: (input: CreateReleasePayload) => request<ReleaseSummaryDto>("/releases", { method: "POST", body: JSON.stringify(input) }),
-  addAsset: (releaseId: string, input: CreateAssetInput & { sha256?: string }) => request<AssetDto>(`/releases/${encodeURIComponent(releaseId)}/assets`, { method: "POST", body: JSON.stringify(input) }),
   runRelease: (releaseId: string) => request<WorkflowResultDto>(`/releases/${encodeURIComponent(releaseId)}/run`, { method: "POST" }),
   executeAction: (actionId: string) => request<ActionDto>(`/actions/${encodeURIComponent(actionId)}/execute`, { method: "POST" }),
   decideAction: (actionId: string, decision: "approve" | "reject", reason: string) => request<ApprovalDto>(`/actions/${encodeURIComponent(actionId)}/${decision}`, { method: "POST", body: JSON.stringify({ reason }) }),

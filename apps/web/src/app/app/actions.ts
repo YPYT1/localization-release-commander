@@ -1,6 +1,5 @@
 "use server";
 
-import type { AssetKind } from "@lrc/contracts";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { api, hasRole, type AuthRole, type CreateReleasePayload } from "@/lib/api";
@@ -45,40 +44,6 @@ export async function createReleaseAction(_state: FormState, formData: FormData)
   revalidatePath("/app");
   revalidatePath("/app/releases");
   redirect(`/app/releases/${result.data.id}`);
-}
-
-export async function addAssetAction(releaseId: string, _state: FormState, formData: FormData): Promise<FormState> {
-  const denied = await authorize("Operator");
-  if (denied) return denied;
-  const kind = field(formData, "kind") as AssetKind;
-  const uri = field(formData, "uri");
-  const sha256 = field(formData, "sha256");
-  const content = field(formData, "content");
-  const metadataText = field(formData, "metadata");
-  let metadata: Record<string, unknown> | undefined;
-
-  if (!kind || !field(formData, "fileName") || (!content && !(uri && sha256))) {
-    return { status: "error", message: "请提供文件名，以及内联内容或服务端 URI + SHA-256。" };
-  }
-
-  try {
-    metadata = metadataText ? JSON.parse(metadataText) as Record<string, unknown> : undefined;
-  } catch {
-    return { status: "error", message: "元数据必须是合法 JSON。" };
-  }
-
-  const result = await api.addAsset(releaseId, {
-    kind,
-    fileName: field(formData, "fileName"),
-    language: field(formData, "assetLanguage") || undefined,
-    content: content || undefined,
-    uri: uri || undefined,
-    metadata,
-    sha256: sha256 || undefined,
-  });
-  if (!result.ok) return { status: "error", message: result.message };
-  revalidatePath(`/app/releases/${releaseId}`);
-  return { status: "success", message: `${result.data.fileName} 已登记，SHA-256 ${result.data.sha256.slice(0, 12)}…` };
 }
 
 export async function runReleaseAction(releaseId: string, _state: FormState, _formData: FormData): Promise<FormState> {

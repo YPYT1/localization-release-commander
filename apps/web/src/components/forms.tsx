@@ -1,14 +1,18 @@
 "use client";
 
-import { useActionState } from "react";
-import { addAssetAction, createReleaseAction, decideActionAction, deliveryAction, executeActionAction, runReleaseAction, type FormState } from "@/app/app/actions";
+import { useRouter } from "next/navigation";
+import { useActionState, useRef, useState, type FormEvent } from "react";
+import { createReleaseAction, decideActionAction, deliveryAction, executeActionAction, runReleaseAction, type FormState } from "@/app/app/actions";
 import type { AuthPrincipal, RuleSetDto } from "@/lib/api";
 
 const initialFormState: FormState = { status: "idle", message: "" };
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 
-function Feedback({ state }: { state: FormState }) {
-  if (state.status === "idle") return null;
-  return <p className={`form-feedback ${state.status}`} role="status" aria-live="polite">{state.message}</p>;
+function Feedback({ state, pendingMessage }: { state: FormState; pendingMessage?: string }) {
+  const message = pendingMessage || state.message;
+  if (!message) return null;
+  const error = state.status === "error" && !pendingMessage;
+  return <p className={`form-feedback ${error ? "error" : state.status}`} role={error ? "alert" : "status"} aria-live={error ? "assertive" : "polite"}>{message}</p>;
 }
 
 export function CreateReleaseForm({ ruleSets, principal }: { ruleSets: RuleSetDto[]; principal: AuthPrincipal }) {
@@ -30,13 +34,76 @@ export function CreateReleaseForm({ ruleSets, principal }: { ruleSets: RuleSetDt
 }
 
 export function AddAssetForm({ releaseId }: { releaseId: string }) {
-  const bound = addAssetAction.bind(null, releaseId);
-  const [state, action, pending] = useActionState(bound, initialFormState);
-  return <details className="asset-register"><summary>登记资产 <span aria-hidden="true">＋</span></summary><form action={action}>
-    <div className="field-grid compact"><label><span>类型 *</span><select name="kind" defaultValue="SUBTITLE"><option>VIDEO</option><option>SUBTITLE</option><option>AUDIO</option><option>POSTER</option><option>METADATA</option><option>RIGHTS</option></select></label><label><span>文件名 *</span><input name="fileName" required placeholder="episode-08-en.srt" /></label><label><span>语言</span><input name="assetLanguage" placeholder="en" /></label></div>
-    <div className="asset-source-grid"><label><span>小型文本内容</span><textarea name="content" placeholder="用于字幕、元数据或权利样例（最多 2 MB）" /></label><div><label><span>服务端对象 URI</span><input name="uri" placeholder="s3://delivery/episode-08.mov" /></label><label><span>SHA-256</span><input name="sha256" minLength={64} maxLength={64} pattern="[a-fA-F0-9]{64}" placeholder="64 位十六进制摘要" /></label></div></div>
-    <label className="wide-field"><span>元数据 JSON</span><textarea name="metadata" placeholder={'{"duration": 1420, "codec": "h264"}'} /></label>
-    <Feedback state={state} /><div className="form-actions"><button className="primary-button" disabled={pending}>{pending ? "正在登记…" : "登记到 manifest"}</button></div>
+  const router = useRouter();
+  const [state, setState] = useState(initialFormState);
+  const [pending, setPending] = useState(false);
+  const uploadController = useRef<AbortController | null>(null);
+
+  async function upload(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const file = formData.get("file");
+    const metadata = formData.get("metadata");
+
+    if (!(file instanceof File) || !file.name) {
+      setState({ status: "error", message: "请选择一个要上传的文件。" });
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setState({ status: "error", message: "单个文件不能超过 500 MiB。" });
+      return;
+    }
+    if (typeof metadata === "string" && metadata.trim()) {
+      try {
+        const parsed = JSON.parse(metadata) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+      } catch {
+        setState({ status: "error", message: "元数据必须是合法的 JSON 对象。" });
+        return;
+      }
+    }
+
+    setPending(true);
+    setState(initialFormState);
+    const controller = new AbortController();
+    uploadController.current = controller;
+    try {
+      const response = await fetch(`/api/releases/${encodeURIComponent(releaseId)}/assets/upload`, {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        router.replace(`/login?expired=1&next=${encodeURIComponent(location.pathname)}`);
+        router.refresh();
+        return;
+      }
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { message?: unknown } | null;
+        const message = Array.isArray(payload?.message)
+          ? payload.message.filter((item): item is string => typeof item === "string").join("；")
+          : typeof payload?.message === "string" ? payload.message : "上传未被服务接受。";
+        setState({ status: "error", message });
+        return;
+      }
+      form.reset();
+      setState({ status: "success", message: `${file.name} 已上传并登记到 manifest。` });
+      router.refresh();
+    } catch (error) {
+      setState(error instanceof DOMException && error.name === "AbortError"
+        ? { status: "idle", message: "上传已取消。" }
+        : { status: "error", message: "上传服务暂时不可用，请稍后重试。" });
+    } finally {
+      if (uploadController.current === controller) uploadController.current = null;
+      setPending(false);
+    }
+  }
+
+  return <details className="asset-register"><summary>上传资产 <span aria-hidden="true">＋</span></summary><form onSubmit={upload} aria-busy={pending}>
+    <div className="field-grid compact"><label><span>类型 *</span><select name="kind" defaultValue="SUBTITLE" required><option>VIDEO</option><option>SUBTITLE</option><option>AUDIO</option><option>POSTER</option><option>METADATA</option><option>RIGHTS</option></select></label><label><span>文件 *</span><input name="file" type="file" required /><small>单文件上限 500 MiB</small></label><label><span>语言</span><input name="language" placeholder="en" /></label></div>
+    <label className="wide-field"><span>元数据 JSON</span><textarea name="metadata" placeholder={'{"source": "operator-upload"}'} /></label>
+    <Feedback state={state} pendingMessage={pending ? "正在上传，请勿关闭页面。" : undefined} /><div className="form-actions">{pending ? <button className="quiet-button" type="button" onClick={() => uploadController.current?.abort()}>取消上传</button> : null}<button className="primary-button" type="submit" disabled={pending}>{pending ? "正在上传…" : "上传并登记"}</button></div>
   </form></details>;
 }
 
