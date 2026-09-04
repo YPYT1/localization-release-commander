@@ -3,17 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test src/**/*.test.ts"
+    "dev": "tsx watch src/main.ts",
+    "build": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && tsc -p tsconfig.json",
+    "typecheck": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && tsc --noEmit -p tsconfig.json",
+    "lint": "pnpm run typecheck",
+    "test": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && tsx --test src/**/*.test.ts"
   },
   "dependencies": {
-    "@langchain/core": "1.2.9",
-    "@langchain/langgraph": "1.4.13",
-    "langchain": "1.5.10"
+    "@lrc/contracts": "workspace:*",
+    "@lrc/qc": "workspace:*",
+    "@langchain/langgraph": "1.4.13"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

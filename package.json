@@ -6,10 +6,10 @@
   "packageManager": "pnpm@11.1.2",
   "scripts": {
     "dev": "pnpm --parallel --filter @lrc/web --filter @lrc/api --filter @lrc/worker dev",
-    "build": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/api build && pnpm --filter @lrc/worker build && pnpm --filter @lrc/web build",
-    "typecheck": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/api typecheck && pnpm --filter @lrc/worker typecheck && pnpm --filter @lrc/web typecheck",
-    "test": "pnpm --filter @lrc/worker test",
-    "lint": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/web lint && pnpm --filter @lrc/api lint && pnpm --filter @lrc/worker lint"
+    "build": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && pnpm --filter @lrc/api build && pnpm --filter @lrc/worker build && pnpm --filter @lrc/web build",
+    "typecheck": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc typecheck && pnpm --filter @lrc/api typecheck && pnpm --filter @lrc/worker typecheck && pnpm --filter @lrc/web typecheck",
+    "test": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc test && pnpm --filter @lrc/api test && pnpm --filter @lrc/worker test",
+    "lint": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc typecheck && pnpm --filter @lrc/api lint && pnpm --filter @lrc/worker lint && pnpm --filter @lrc/web lint"
   },
   "devDependencies": {
     "typescript": "6.0.3"
