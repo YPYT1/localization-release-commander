@@ -35,12 +35,13 @@ export function checkRightsWindow(input: RightsWindowInput): RightsWindowResult 
   if (validUntil <= validFrom) throw new RangeError("validUntil must be after validFrom");
   if (!Number.isFinite(warningWindowHours) || warningWindowHours < 0) throw new RangeError("warningWindowHours must be non-negative");
 
-  const remainingHours = Number(((validUntil - evaluationAt) / 3_600_000).toFixed(3));
+  const remainingMilliseconds = validUntil - evaluationAt;
+  const remainingHours = remainingMilliseconds / 3_600_000;
   const status: RightsWindowStatus = evaluationAt < validFrom
     ? "NOT_STARTED"
     : evaluationAt >= validUntil
       ? "EXPIRED"
-      : remainingHours <= warningWindowHours
+      : remainingMilliseconds <= warningWindowHours * 3_600_000
         ? "EXPIRING_SOON"
         : "VALID";
 

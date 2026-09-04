@@ -29,7 +29,16 @@ function formatTimestamp(milliseconds: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")},${String(millis).padStart(3, "0")}`;
 }
 
-function renderDiff(changes: readonly SubtitleRepairChange[]): string {
+function normalizationChanges(input: string, cueIndices: readonly number[]): string[] {
+  return [
+    ...(!input.startsWith("\uFEFF") ? ["UTF-8 BOM added"] : []),
+    ...(cueIndices.some((index, offset) => index !== offset + 1) ? ["cue indices renumbered"] : []),
+    ...(input.includes("\r") ? ["line endings changed to LF"] : []),
+    ...(!input.endsWith("\n") ? ["final newline added"] : []),
+  ];
+}
+
+function renderDiff(changes: readonly SubtitleRepairChange[], normalizations: readonly string[]): string {
   if (changes.length === 0) return "";
   const lines = ["--- original.srt", "+++ repaired.srt"];
   for (const change of changes) {
@@ -39,6 +48,7 @@ function renderDiff(changes: readonly SubtitleRepairChange[]): string {
       `+${formatTimestamp(change.after.startMs)} --> ${formatTimestamp(change.after.endMs)}`,
     );
   }
+  if (normalizations.length > 0) lines.push(`@@ normalization: ${normalizations.join(", ")} @@`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -49,7 +59,7 @@ export function repairSrt(input: string, options: SubtitleValidationOptions): Su
     "SUBTITLE_DURATION_TOO_SHORT",
     "SUBTITLE_DURATION_TOO_LONG",
   ]);
-  if (initial.cues.length === 0 || initial.findings.some(({ code }) => !repairableCodes.has(code))) {
+  if (initial.cues.length === 0 || initial.findings.length === 0 || initial.findings.some(({ code }) => !repairableCodes.has(code))) {
     return {
       changed: false,
       originalContent: input,
@@ -91,13 +101,25 @@ export function repairSrt(input: string, options: SubtitleValidationOptions): Su
     }
   });
 
+  if (changes.length === 0) {
+    return {
+      changed: false,
+      originalContent: input,
+      content: input,
+      rollbackContent: input,
+      diff: "",
+      changes: [],
+      validation: initial,
+    };
+  }
+
   const content = serializeSrt(cues);
   return {
     changed: changes.length > 0,
     originalContent: input,
     content,
     rollbackContent: input,
-    diff: renderDiff(changes),
+    diff: renderDiff(changes, normalizationChanges(input, initial.cues.map(({ index }) => index))),
     changes,
     validation: validateSrt(content, options),
   };

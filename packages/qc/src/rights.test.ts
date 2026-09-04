@@ -51,3 +51,16 @@ test("rights checks distinguish valid, not-started, and expired windows", () => 
   assert.equal(expired.status, "EXPIRED");
   assert.equal(expired.blocked, true);
 });
+
+test("rights remain valid one second outside the 72-hour warning window", () => {
+  const result = checkRightsWindow({
+    territory: "US",
+    validFrom: "2026-01-01T00:00:00.000Z",
+    validUntil: "2026-09-07T00:00:01.000Z",
+    evaluationAt,
+  });
+
+  assert.equal(result.status, "VALID");
+  assert.equal(result.blocked, false);
+  assert.equal(result.remainingHours > 72, true);
+});
