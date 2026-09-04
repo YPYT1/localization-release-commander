@@ -1,6 +1,13 @@
 import type {
+  AssetDto,
+  AuditEventDto,
+  CreateAssetInput,
+  CreateReleaseInput,
+  FindingDto,
   HealthDto,
+  ReleaseDetailDto,
   ReleaseSummaryDto,
+  WorkflowResultDto,
 } from "@lrc/contracts";
 
 const API_BASE_URL = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -10,6 +17,20 @@ export type ApiFailureKind = "connection" | "forbidden" | "not-found" | "respons
 export type ApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; kind: ApiFailureKind; message: string; status?: number };
+
+export type TimelineEventDto = AuditEventDto & { summary: string };
+
+export interface RuleSetDto {
+  id: string;
+  name: string;
+  version: string;
+  platform: "YOUTUBE" | "OTT";
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  checks: number;
+  updatedAt: string;
+}
+
+export type CreateReleasePayload = CreateReleaseInput & { ruleSetId: string };
 
 function failure(status: number, message: string): ApiResult<never> {
   if (status === 403) return { ok: false, kind: "forbidden", message, status };
@@ -75,6 +96,13 @@ async function listRequest<T>(path: string, key: string): Promise<ApiResult<T[]>
 export const api = {
   health: () => request<HealthDto>("/health"),
   releases: (query = "") => listRequest<ReleaseSummaryDto>(`/releases${query}`, "releases"),
+  release: (releaseId: string) => request<ReleaseDetailDto>(`/releases/${encodeURIComponent(releaseId)}`),
+  findings: (releaseId: string) => listRequest<FindingDto>(`/releases/${encodeURIComponent(releaseId)}/findings`, "findings"),
+  timeline: (releaseId: string) => listRequest<TimelineEventDto>(`/releases/${encodeURIComponent(releaseId)}/timeline`, "events"),
+  ruleSets: () => listRequest<RuleSetDto>("/rulesets", "rulesets"),
+  createRelease: (input: CreateReleasePayload) => request<ReleaseSummaryDto>("/releases", { method: "POST", body: JSON.stringify(input) }),
+  addAsset: (releaseId: string, input: CreateAssetInput & { sha256?: string }) => request<AssetDto>(`/releases/${encodeURIComponent(releaseId)}/assets`, { method: "POST", body: JSON.stringify(input) }),
+  runRelease: (releaseId: string) => request<WorkflowResultDto>(`/releases/${encodeURIComponent(releaseId)}/run`, { method: "POST", headers: { "x-actor-id": "web-operator" } }),
 };
 
 export function apiFailureLabel(result: Extract<ApiResult<unknown>, { ok: false }>) {
