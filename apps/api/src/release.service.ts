@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
-import type { AssetDto, CreateReleaseInput, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
-import { RELEASE_REPOSITORY, type ReleaseRepository } from "./domain/repository.js";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
+import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseRepository } from "./domain/repository.js";
 import type { ValidatedAssetInput } from "./dto-validation.js";
 
 @Injectable()
@@ -53,5 +53,77 @@ export class ReleaseService {
       payload: { assetId: asset.id, kind: asset.kind, fileName: asset.fileName, sha256 },
     });
     return asset;
+  }
+
+  async listFindings(releaseId: string): Promise<FindingDto[]> {
+    await this.requireRelease(releaseId);
+    return this.repository.listFindings(releaseId);
+  }
+
+  async getTimeline(releaseId: string, after?: string): Promise<Array<AuditEventDto & { summary: string }>> {
+    await this.requireRelease(releaseId);
+    return (await this.repository.listAudit({ releaseId, after, limit: 200 })).map((event) => ({
+      ...event,
+      summary: this.auditSummary(event),
+    }));
+  }
+
+  listAudit(query: Record<string, string | undefined>): Promise<AuditEventDto[]> {
+    return this.repository.listAudit(this.parseAuditFilter(query));
+  }
+
+  async getDashboard(): Promise<Record<string, number>> {
+    const releases = await this.repository.listReleases();
+    return {
+      totalReleases: releases.length,
+      draftReleases: releases.filter(({ state }) => state === "DRAFT").length,
+      blockedReleases: releases.filter(({ state }) => state === "BLOCKED" || state === "NEEDS_HUMAN").length,
+      awaitingApproval: releases.filter(({ state }) => state === "READY_FOR_APPROVAL").length,
+      completedReleases: releases.filter(({ state }) => state === "COMPLETED" || state === "QC_PASSED").length,
+    };
+  }
+
+  getRuleSets() {
+    const updatedAt = "2026-09-04T00:00:00.000Z";
+    return [
+      { id: "youtube-global-v1", name: "YouTube Global Delivery", version: "1.0.0", platform: "YOUTUBE", status: "PUBLISHED", checks: 8, updatedAt },
+      { id: "ott-mvp-v1", name: "OTT Delivery MVP", version: "1.0.0", platform: "OTT", status: "PUBLISHED", checks: 10, updatedAt },
+    ] as const;
+  }
+
+  getSettings() {
+    const configuredRetention = Number(process.env.AUDIT_RETENTION_DAYS ?? 730);
+    return {
+      workspaceName: process.env.WORKSPACE_NAME ?? "Localization Release Commander",
+      environment: process.env.NODE_ENV ?? "development",
+      retentionDays: Number.isSafeInteger(configuredRetention) && configuredRetention > 0 ? configuredRetention : 730,
+      members: [{ id: "demo-operator", name: "Demo Operator", email: "operator@example.invalid", role: "Operator" }],
+      connections: [
+        { id: "youtube", provider: "YouTube", status: process.env.YOUTUBE_CONNECTION_ID ? "CONNECTED" : "NOT_CONFIGURED", identifier: this.maskIdentifier(process.env.YOUTUBE_CONNECTION_ID) },
+        { id: "ott", provider: "OTT Sandbox", status: "SANDBOX", identifier: "sandbox" },
+      ],
+    };
+  }
+
+  private async requireRelease(id: string): Promise<void> {
+    if (!(await this.repository.getReleaseRecord(id))) throw new NotFoundException("Release not found");
+  }
+
+  private parseAuditFilter(query: Record<string, string | undefined>): AuditFilter {
+    const limit = query.limit === undefined ? 100 : Number(query.limit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new BadRequestException("limit must be an integer between 1 and 200");
+    if (query.after && Number.isNaN(Date.parse(query.after))) throw new BadRequestException("after must be an ISO date-time");
+    return { releaseId: query.releaseId, actor: query.actor, type: query.type, after: query.after, limit };
+  }
+
+  private auditSummary(event: AuditEventDto): string {
+    if (typeof event.payload.summary === "string") return event.payload.summary;
+    if (event.type === "release.created") return `Release created at version ${String(event.payload.version ?? 1)}`;
+    if (event.type === "asset.created") return `${String(event.payload.kind ?? "Asset")} ${String(event.payload.fileName ?? "file")} registered`;
+    return event.type.replaceAll(".", " ");
+  }
+
+  private maskIdentifier(identifier?: string): string {
+    return identifier ? `••••${identifier.slice(-4)}` : "not configured";
   }
 }

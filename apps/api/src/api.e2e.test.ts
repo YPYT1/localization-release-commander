@@ -80,3 +80,40 @@ test("an asset is hashed, deduplicated, and visible in release detail", async ()
     assert.deepEqual(detail.assets.map(({ id }) => id), [first.id]);
   });
 });
+
+test("read models expose findings, timeline, audit, rules, settings, and dashboard", async () => {
+  await withApi(async (baseUrl) => {
+    const releaseResponse = await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
+    });
+    const release = (await releaseResponse.json()) as ReleaseSummaryDto;
+    await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "VIDEO", fileName: "episode-8.mp4", content: "demo-video" }),
+    });
+
+    const findings = (await (await fetch(`${baseUrl}/releases/${release.id}/findings`)).json()) as unknown[];
+    assert.deepEqual(findings, []);
+
+    const timeline = (await (await fetch(`${baseUrl}/releases/${release.id}/timeline`)).json()) as Array<{ type: string; summary: string }>;
+    assert.deepEqual(timeline.map(({ type }) => type), ["release.created", "asset.created"]);
+    assert.equal(timeline.every(({ summary }) => summary.length > 0), true);
+
+    const audit = (await (await fetch(`${baseUrl}/audit?releaseId=${release.id}&limit=10`)).json()) as Array<{ type: string }>;
+    assert.deepEqual(audit.map(({ type }) => type), ["release.created", "asset.created"]);
+
+    const dashboard = (await (await fetch(`${baseUrl}/dashboard`)).json()) as { totalReleases: number; draftReleases: number };
+    assert.deepEqual(dashboard, { totalReleases: 1, draftReleases: 1, blockedReleases: 0, awaitingApproval: 0, completedReleases: 0 });
+
+    const rules = (await (await fetch(`${baseUrl}/rulesets`)).json()) as Array<{ status: string; checks: number }>;
+    assert.equal(rules.length, 2);
+    assert.equal(rules.every(({ status, checks }) => status === "PUBLISHED" && checks > 0), true);
+
+    const settings = (await (await fetch(`${baseUrl}/settings`)).json()) as { retentionDays: number; connections: Array<Record<string, unknown>> };
+    assert.equal(settings.retentionDays, 730);
+    assert.equal(JSON.stringify(settings).includes("secret"), false);
+  });
+});
