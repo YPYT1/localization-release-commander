@@ -1,8 +1,6 @@
-import { createHash } from "node:crypto";
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import type { AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
 import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseRepository } from "./domain/repository.js";
-import type { ValidatedAssetInput } from "./dto-validation.js";
 import { getRuleSet, RULE_SETS } from "./rulesets.js";
 import type { AuthPrincipal } from "./auth/auth.js";
 import { ProjectAccessService } from "./auth/project-access.service.js";
@@ -47,29 +45,6 @@ export class ReleaseService {
 
   getRelease(id: string, principal: AuthPrincipal): Promise<ReleaseDetailDto> {
     return this.access.requireRelease(principal, id);
-  }
-
-  async addAsset(releaseId: string, input: ValidatedAssetInput, principal: AuthPrincipal): Promise<AssetDto> {
-    const release = await this.access.requireReleaseRecord(principal, releaseId);
-    if (!["DRAFT", "BLOCKED", "REMEDIATING", "NEEDS_HUMAN"].includes(release.state)) {
-      throw new ConflictException(`Assets cannot be changed while release is ${release.state}`);
-    }
-    const sha256 = input.sha256 ?? createHash("sha256").update(input.content ?? "", "utf8").digest("hex");
-    const existing = await this.repository.findAssetByHash(releaseId, sha256);
-    if (existing) return existing;
-
-    const asset = await this.repository.createAsset(releaseId, {
-      ...input,
-      sha256,
-      uri: input.uri ?? `asset://${sha256}`,
-    });
-    await this.repository.appendAudit({
-      releaseId,
-      type: "asset.created",
-      actor: principal.id,
-      payload: { assetId: asset.id, kind: asset.kind, fileName: asset.fileName, sha256 },
-    });
-    return asset;
   }
 
   async listFindings(releaseId: string, principal: AuthPrincipal): Promise<FindingDto[]> {

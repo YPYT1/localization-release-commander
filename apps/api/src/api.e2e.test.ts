@@ -1,18 +1,37 @@
 import "reflect-metadata";
 import assert from "node:assert/strict";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
+import { Test } from "@nestjs/testing";
 import type { ActionDto, ApprovalDto, AssetDto, DeliveryAttemptDto, ReleaseDetailDto, ReleaseSummaryDto, WorkflowResultDto } from "@lrc/contracts";
 import { AppModule } from "./app.module.js";
 import type { AuthPrincipal } from "./auth/auth.js";
 import { signTestToken } from "./auth/testing.js";
+import { FFPROBE_RUNNER, type CommandRunner } from "./storage/media-inspection.service.js";
+import { configureHttpBodyParsing } from "./http-configuration.js";
 
 const TEST_AUTH_SECRET = "lrc-test-secret-is-at-least-thirty-two-bytes-long";
 const ADMIN: AuthPrincipal = { id: "admin", roles: ["Admin"], projectIds: [] };
 process.env.NODE_ENV = "test";
 process.env.AUTH_JWT_SECRET = TEST_AUTH_SECRET;
+
+const TEST_FFPROBE_RUNNER: CommandRunner = {
+  async execFile() {
+    return {
+      stdout: JSON.stringify({
+        format: { format_name: "test-container", duration: "1.000", bit_rate: "64000" },
+        streams: [
+          { index: 0, codec_type: "video", codec_name: "h264", width: 320, height: 180 },
+          { index: 1, codec_type: "audio", codec_name: "aac", channels: 2, sample_rate: "48000" },
+        ],
+      }),
+    };
+  },
+};
 
 function fetch(input: string | URL, init: RequestInit = {}, principal: AuthPrincipal = ADMIN): Promise<Response> {
   const headers = new Headers(init.headers);
@@ -21,26 +40,37 @@ function fetch(input: string | URL, init: RequestInit = {}, principal: AuthPrinc
 }
 
 async function withApi(
-  run: (baseUrl: string) => Promise<void>,
+  run: (baseUrl: string, storageDir: string) => Promise<void>,
   environment: { demoAuthEnabled?: boolean; nodeEnv?: string } = {},
 ): Promise<void> {
   const previousDemoAuth = process.env.DEMO_AUTH_ENABLED;
   const previousNodeEnv = process.env.NODE_ENV;
+  const previousStorageDir = process.env.ASSET_STORAGE_DIR;
+  const storageDir = await mkdtemp(join(tmpdir(), "lrc-api-assets-"));
   process.env.DEMO_AUTH_ENABLED = environment.demoAuthEnabled ? "true" : "false";
   process.env.NODE_ENV = environment.nodeEnv ?? "test";
+  process.env.ASSET_STORAGE_DIR = storageDir;
   delete process.env.DATABASE_URL;
-  const app: INestApplication = await NestFactory.create(AppModule, { logger: false });
+  const testingModule = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(FFPROBE_RUNNER)
+    .useValue(TEST_FFPROBE_RUNNER)
+    .compile();
+  const app: INestApplication = testingModule.createNestApplication({ logger: false, bodyParser: false });
+  configureHttpBodyParsing(app);
   await app.listen(0, "127.0.0.1");
   const address = app.getHttpServer().address() as AddressInfo;
 
   try {
-    await run(`http://127.0.0.1:${address.port}`);
+    await run(`http://127.0.0.1:${address.port}`, storageDir);
   } finally {
     await app.close();
+    await rm(storageDir, { recursive: true, force: true });
     if (previousDemoAuth === undefined) delete process.env.DEMO_AUTH_ENABLED;
     else process.env.DEMO_AUTH_ENABLED = previousDemoAuth;
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
+    if (previousStorageDir === undefined) delete process.env.ASSET_STORAGE_DIR;
+    else process.env.ASSET_STORAGE_DIR = previousStorageDir;
   }
 }
 
@@ -158,7 +188,7 @@ test("R3 requires two signed approvers and ignores spoofed actor headers", async
     for (const asset of [
       { kind: "VIDEO", fileName: "r3.mp4", content: "r3-video" },
       { kind: "SUBTITLE", language: "en", fileName: "r3.srt", content: "r3-subtitle" },
-      { kind: "RIGHTS", fileName: "rights.json", content: "r3-rights", metadata: { status: "EXPIRING" } },
+      { kind: "RIGHTS", fileName: "rights.json", content: JSON.stringify({ status: "EXPIRING" }) },
     ]) {
       assert.equal((await fetch(`${baseUrl}/releases/${release.id}/assets`, {
         method: "POST",
@@ -273,6 +303,12 @@ test("an asset is hashed, deduplicated, and visible in release detail", async ()
     assert.equal(firstResponse.status, 201);
     const first = (await firstResponse.json()) as AssetDto;
     assert.equal(first.sha256, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+    assert.match(first.uri, /^asset:\/\/objects\/[0-9a-f]{2}\/[0-9a-f-]{36}\.asset$/);
+
+    const contentResponse = await fetch(`${baseUrl}/assets/${first.id}/content`);
+    assert.equal(contentResponse.status, 200);
+    assert.equal(await contentResponse.text(), "hello");
+    assert.equal(contentResponse.headers.get("content-type"), "application/x-subrip");
 
     const duplicateResponse = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
       method: "POST",
@@ -288,6 +324,130 @@ test("an asset is hashed, deduplicated, and visible in release detail", async ()
     assert.equal(detail.projectId.length > 0, true);
     assert.equal(detail.ruleSetId, "youtube-en-v1");
     assert.deepEqual(detail.assets.map(({ id }) => id), [first.id]);
+  });
+});
+
+test("concurrent identical uploads create one asset, object, and audit event", async () => {
+  await withApi(async (baseUrl, storageDir) => {
+    const release = (await (await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Concurrent Studio", ruleSetId: "youtube-en-v1", episode: "Episode 11", territory: "US", platform: "YOUTUBE", language: "en" }),
+    })).json()) as ReleaseDetailDto;
+    const request = () => fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "SUBTITLE", language: "en", fileName: "same.srt", content: "same-content" }),
+    });
+
+    const [left, right] = await Promise.all([request(), request()]);
+    assert.equal(left.status, 201);
+    assert.equal(right.status, 201);
+    const [leftAsset, rightAsset] = await Promise.all([left.json(), right.json()]) as [AssetDto, AssetDto];
+    assert.equal(leftAsset.id, rightAsset.id);
+    const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.equal(detail.assets.length, 1);
+    const timeline = (await (await fetch(`${baseUrl}/releases/${release.id}/timeline`)).json()) as Array<{ type: string }>;
+    assert.equal(timeline.filter(({ type }) => type === "asset.created").length, 1);
+    const entries = await readdir(storageDir, { recursive: true, withFileTypes: true });
+    assert.equal(entries.filter((entry) => entry.isFile()).length, 1);
+  });
+});
+
+test("multipart upload persists, inspects, and serves exact subtitle bytes within project scope", async () => {
+  await withApi(async (baseUrl) => {
+    const releaseResponse = await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Upload Studio", ruleSetId: "youtube-en-v1", episode: "Episode 12", territory: "US", platform: "YOUTUBE", language: "en" }),
+    });
+    const release = (await releaseResponse.json()) as ReleaseDetailDto;
+    const subtitle = "1\r\n00:00:00,000 --> 00:00:01,000\r\nHello world\r\n";
+    const form = new FormData();
+    form.set("kind", "SUBTITLE");
+    form.set("language", "en");
+    form.set("metadata", JSON.stringify({ source: "operator-upload", contentType: "text/html", parentAssetId: release.id }));
+    form.set("file", new Blob([subtitle], { type: "text/plain" }), "episode-12.srt");
+
+    const uploadResponse = await fetch(`${baseUrl}/releases/${release.id}/assets/upload`, { method: "POST", body: form });
+    assert.equal(uploadResponse.status, 201);
+    const asset = (await uploadResponse.json()) as AssetDto;
+    assert.equal(asset.fileName, "episode-12.srt");
+    assert.equal(asset.metadata.originalFileName, "episode-12.srt");
+    assert.equal(asset.metadata.contentType, "application/x-subrip");
+    assert.equal(asset.metadata.parentAssetId, undefined);
+    assert.deepEqual(asset.metadata.subtitle, { valid: true, cueCount: 1, durationMs: 1000, findings: [] });
+
+    const download = await fetch(`${baseUrl}/assets/${asset.id}/content`);
+    assert.equal(download.status, 200);
+    assert.equal(await download.text(), subtitle);
+    assert.equal(download.headers.get("cache-control"), "private, no-store");
+    assert.match(download.headers.get("content-disposition") ?? "", /^attachment; filename="asset"; filename\*=UTF-8''episode-12\.srt$/);
+
+    const foreign: AuthPrincipal = { id: "foreign", roles: ["Operator"], projectIds: ["00000000-0000-4000-8000-000000000001"] };
+    assert.equal((await fetch(`${baseUrl}/assets/${asset.id}/content`, {}, foreign)).status, 403);
+
+    const timeline = await (await fetch(`${baseUrl}/releases/${release.id}/timeline`)).text();
+    assert.equal(timeline.includes(subtitle), false);
+  });
+});
+
+test("multipart preflight rejects invalid and foreign releases before writing an incoming file", async () => {
+  await withApi(async (baseUrl, storageDir) => {
+    const release = (await (await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Guard Studio", ruleSetId: "youtube-en-v1", episode: "Episode Guard", territory: "US", platform: "YOUTUBE", language: "en" }),
+    })).json()) as ReleaseDetailDto;
+    const upload = () => {
+      const form = new FormData();
+      form.set("kind", "SUBTITLE");
+      form.set("language", "en");
+      form.set("file", new Blob(["subtitle"], { type: "text/plain" }), "guard.srt");
+      return form;
+    };
+
+    assert.equal((await fetch(`${baseUrl}/releases/not-a-uuid/assets/upload`, { method: "POST", body: upload() })).status, 400);
+    const foreign: AuthPrincipal = { id: "foreign-operator", roles: ["Operator"], projectIds: ["00000000-0000-4000-8000-000000000001"] };
+    assert.equal((await fetch(`${baseUrl}/releases/${release.id}/assets/upload`, { method: "POST", body: upload() }, foreign)).status, 403);
+
+    const incoming = await readdir(join(storageDir, ".incoming"), { recursive: true, withFileTypes: true });
+    assert.equal(incoming.filter((entry) => entry.isFile()).length, 0);
+  });
+});
+
+test("asset endpoints reject claimed locations and remove files that fail server inspection", async () => {
+  await withApi(async (baseUrl, storageDir) => {
+    const releaseResponse = await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Rejected Assets", ruleSetId: "youtube-en-v1", episode: "Episode 13", territory: "US", platform: "YOUTUBE", language: "en" }),
+    });
+    const release = (await releaseResponse.json()) as ReleaseDetailDto;
+
+    const claimed = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "SUBTITLE", fileName: "claimed.srt", uri: "asset://objects/aa/fake.asset", sha256: "a".repeat(64) }),
+    });
+    assert.equal(claimed.status, 400);
+
+    const invalid = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "RIGHTS", fileName: "rights.json", content: "not-json" }),
+    });
+    assert.equal(invalid.status, 400);
+
+    const invalidUtf8 = new FormData();
+    invalidUtf8.set("kind", "METADATA");
+    invalidUtf8.set("file", new Blob([Uint8Array.of(0xff, 0xfe)], { type: "application/json" }), "metadata.json");
+    assert.equal((await fetch(`${baseUrl}/releases/${release.id}/assets/upload`, { method: "POST", body: invalidUtf8 })).status, 400);
+
+    const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.deepEqual(detail.assets, []);
+    const entries = await readdir(storageDir, { recursive: true, withFileTypes: true });
+    assert.equal(entries.filter((entry) => entry.isFile()).length, 0);
   });
 });
 
@@ -400,7 +560,7 @@ test("a repair action is executable and a rejected submission remains blocked", 
     const release = (await releaseResponse.json()) as ReleaseSummaryDto;
     for (const asset of [
       { kind: "VIDEO", fileName: "episode-9.mp4", content: "video" },
-      { kind: "SUBTITLE", language: "ja", fileName: "episode-9.srt", content: "subtitle", metadata: { cpsExceeded: true } },
+      { kind: "SUBTITLE", language: "ja", fileName: "episode-9.srt", content: "1\n00:00:00,000 --> 00:00:00,500\n1234567890\n", metadata: { cpsExceeded: true } },
     ]) {
       await fetch(`${baseUrl}/releases/${release.id}/assets`, {
         method: "POST",
@@ -419,7 +579,13 @@ test("a repair action is executable and a rejected submission remains blocked", 
     assert.equal(executed.status, "COMPLETED");
 
     const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
-    assert.equal(detail.assets.filter(({ kind }) => kind === "SUBTITLE").length, 2);
+    const subtitles = detail.assets.filter(({ kind }) => kind === "SUBTITLE");
+    assert.equal(subtitles.length, 2);
+    const repaired = subtitles.find(({ parentAssetId }) => parentAssetId === subtitles[0]?.id);
+    assert.ok(repaired);
+    const repairedContent = await fetch(`${baseUrl}/assets/${repaired.id}/content`);
+    assert.equal(repairedContent.status, 200);
+    assert.notEqual(await repairedContent.text(), "1\n00:00:00,000 --> 00:00:00,500\n1234567890\n");
     const submitAction = detail.actions.find(({ type }) => type === "SUBMIT_DELIVERY");
     assert.equal(submitAction?.status, "PENDING_APPROVAL");
 

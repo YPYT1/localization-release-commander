@@ -4,8 +4,8 @@ import type {
   ActionStatus,
   ApprovalDto,
   AssetDto,
+  AssetKind,
   AuditEventDto,
-  CreateAssetInput,
   CreateReleaseInput,
   DeliveryAttemptDto,
   DeliveryStatus,
@@ -66,6 +66,47 @@ export interface AuditFilter {
   limit?: number;
 }
 
+export interface AssetAuditContext {
+  actor: string;
+  sizeBytes: number;
+}
+
+export interface NewAssetRecord {
+  releaseId: string;
+  parentAssetId?: string | null;
+  kind: AssetKind;
+  language?: string | null;
+  fileName: string;
+  uri: string;
+  sha256: string;
+  metadata: Record<string, unknown>;
+}
+
+export type AssetRegistrationResult =
+  | { outcome: "created"; asset: AssetDto }
+  | { outcome: "existing"; asset: AssetDto }
+  | { outcome: "not_mutable"; state: ReleaseState };
+
+export class AssetRegistrationUncertainError extends Error {
+  constructor(cause?: unknown) {
+    super("Asset registration outcome is uncertain", { cause });
+    this.name = "AssetRegistrationUncertainError";
+  }
+}
+
+export function resolveAssetRegistrationVerification(
+  input: NewAssetRecord,
+  asset: AssetDto | undefined,
+  cause?: unknown,
+): Exclude<AssetRegistrationResult, { outcome: "not_mutable" }> {
+  if (!asset) throw new AssetRegistrationUncertainError(cause);
+  return asset.uri === input.uri ? { outcome: "created", asset } : { outcome: "existing", asset };
+}
+
+export function isAssetMutableState(state: ReleaseState): boolean {
+  return state === "DRAFT" || state === "BLOCKED" || state === "REMEDIATING" || state === "NEEDS_HUMAN";
+}
+
 export interface ReleaseRepository {
   createProject(name: string): Promise<ProjectDto>;
   getProject(id: string): Promise<ProjectDto | undefined>;
@@ -75,8 +116,11 @@ export interface ReleaseRepository {
   getRelease(id: string): Promise<ReleaseDetailDto | undefined>;
   updateReleaseState(id: string, state: ReleaseState): Promise<ReleaseRecord | undefined>;
 
-  findAssetByHash(releaseId: string, sha256: string): Promise<AssetDto | undefined>;
-  createAsset(releaseId: string, input: CreateAssetInput & { sha256: string; uri: string }): Promise<AssetDto>;
+  getAsset(id: string): Promise<AssetDto | undefined>;
+  registerAsset(
+    input: NewAssetRecord,
+    audit: AssetAuditContext,
+  ): Promise<AssetRegistrationResult>;
 
   replaceFindings(releaseId: string, findings: NewFinding[]): Promise<FindingDto[]>;
   listFindings(releaseId: string): Promise<FindingDto[]>;

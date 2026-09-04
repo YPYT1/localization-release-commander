@@ -1,5 +1,7 @@
 import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
+import { MulterModule } from "@nestjs/platform-express";
+import { mkdir } from "node:fs/promises";
 import { HealthController } from "./health.controller.js";
 import { RELEASE_REPOSITORY } from "./domain/repository.js";
 import { createReleaseRepository } from "./storage/repository.factory.js";
@@ -13,15 +15,39 @@ import { ReleaseWorkflowService } from "./workflow/release-workflow.service.js";
 import { AUTH_SECRET, AuthGuard, AuthTokenService, loadAuthSecret } from "./auth/auth.js";
 import { ProjectAccessService } from "./auth/project-access.service.js";
 import { AuthController } from "./auth/auth.controller.js";
+import { AssetsController } from "./assets.controller.js";
+import { AssetStorageService, resolveAssetIncomingDirectory, resolveAssetMaxBytes } from "./storage/asset-storage.service.js";
+import { AssetInspectionService, FFPROBE_RUNNER, FfprobeService, nodeCommandRunner } from "./storage/media-inspection.service.js";
+import { AssetService } from "./asset.service.js";
+import { UploadAssetGuard } from "./upload-asset.guard.js";
 
 @Module({
-  controllers: [HealthController, AuthController, ReleasesController, ReadModelController, ActionsController, DeliveriesController],
+  imports: [
+    MulterModule.registerAsync({
+      useFactory: async () => {
+        const dest = resolveAssetIncomingDirectory();
+        await mkdir(dest, { recursive: true });
+        return {
+          dest,
+          preservePath: false,
+          limits: { fileSize: resolveAssetMaxBytes(), files: 1, fields: 4, parts: 5, fieldSize: 65_536 },
+        };
+      },
+    }),
+  ],
+  controllers: [HealthController, AuthController, ReleasesController, AssetsController, ReadModelController, ActionsController, DeliveriesController],
   providers: [
     ReleaseService,
     ReleaseWorkflowService,
     DeterministicOrchestrationService,
     AuthTokenService,
     ProjectAccessService,
+    AssetService,
+    UploadAssetGuard,
+    AssetStorageService,
+    AssetInspectionService,
+    FfprobeService,
+    { provide: FFPROBE_RUNNER, useValue: nodeCommandRunner },
     { provide: AUTH_SECRET, useFactory: loadAuthSecret },
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: ORCHESTRATION_SERVICE, useExisting: DeterministicOrchestrationService },

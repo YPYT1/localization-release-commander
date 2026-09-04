@@ -5,6 +5,7 @@ import { RELEASE_REPOSITORY, type NewAction, type ReleaseRepository } from "../d
 import { ORCHESTRATION_SERVICE, type OrchestrationRunResult, type OrchestrationService } from "./orchestration.js";
 import type { AuthPrincipal } from "../auth/auth.js";
 import { ProjectAccessService } from "../auth/project-access.service.js";
+import { AssetService } from "../asset.service.js";
 
 const RUNNABLE_STATES: ReleaseState[] = ["DRAFT", "BLOCKED", "REMEDIATING", "NEEDS_HUMAN", "READY_FOR_APPROVAL", "QC_FAILED"];
 
@@ -14,6 +15,7 @@ export class ReleaseWorkflowService {
     @Inject(RELEASE_REPOSITORY) private readonly repository: ReleaseRepository,
     @Inject(ORCHESTRATION_SERVICE) private readonly orchestration: OrchestrationService,
     private readonly access: ProjectAccessService,
+    private readonly assets: AssetService,
   ) {}
 
   async validateRelease(releaseId: string, principal: AuthPrincipal): Promise<WorkflowResultDto> {
@@ -78,8 +80,7 @@ export class ReleaseWorkflowService {
       const result = await this.orchestration.executeAction(action, release);
       let assetId: string | undefined;
       if (result.asset) {
-        const existing = await this.repository.findAssetByHash(action.releaseId, result.asset.sha256);
-        const asset = existing ?? (await this.repository.createAsset(action.releaseId, result.asset));
+        const asset = await this.assets.addDerived(action.releaseId, result.asset, principal);
         assetId = asset.id;
       }
       const completed = await this.repository.updateAction(action.id, "COMPLETED", { ...result.output, assetId });

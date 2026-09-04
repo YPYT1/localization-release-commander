@@ -1,5 +1,5 @@
 import { ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import type { ActionDto, DeliveryAttemptDto, ReleaseDetailDto } from "@lrc/contracts";
+import type { ActionDto, AssetDto, DeliveryAttemptDto, ReleaseDetailDto } from "@lrc/contracts";
 import { RELEASE_REPOSITORY, type ReleaseRecord, type ReleaseRepository } from "../domain/repository.js";
 import type { AuthPrincipal } from "./auth.js";
 
@@ -35,6 +35,12 @@ export class ProjectAccessService {
     const action = await this.repository.getAction(actionId);
     if (!action) throw new NotFoundException("Action not found");
     return { action, release: await this.requireRelease(principal, action.releaseId) };
+  }
+
+  async requireAsset(principal: AuthPrincipal, assetId: string): Promise<{ asset: AssetDto; release: ReleaseRecord }> {
+    const asset = await this.repository.getAsset(assetId);
+    if (!asset) throw new NotFoundException("Asset not found");
+    return { asset, release: await this.requireReleaseRecord(principal, asset.releaseId) };
   }
 
   async requireDelivery(principal: AuthPrincipal, deliveryId: string): Promise<{ delivery: DeliveryAttemptDto; release: ReleaseDetailDto }> {

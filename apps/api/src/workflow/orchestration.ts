@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import type { ActionDto, CreateAssetInput, DeliveryAttemptDto, ReleaseDetailDto } from "@lrc/contracts";
+import type { ActionDto, AssetKind, DeliveryAttemptDto, ReleaseDetailDto } from "@lrc/contracts";
+import { repairSrt } from "@lrc/qc";
 import type { NewFinding } from "../domain/repository.js";
+import { AssetStorageService } from "../storage/asset-storage.service.js";
 
 export const ORCHESTRATION_SERVICE = Symbol("ORCHESTRATION_SERVICE");
 
@@ -18,7 +20,14 @@ export interface OrchestrationRunResult {
 
 export interface OrchestrationExecutionResult {
   output: Record<string, unknown>;
-  asset?: CreateAssetInput & { sha256: string; uri: string };
+  asset?: {
+    kind: AssetKind;
+    language?: string;
+    fileName: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    parentAssetId: string;
+  };
 }
 
 export interface OrchestrationService {
@@ -30,6 +39,8 @@ export interface OrchestrationService {
 
 @Injectable()
 export class DeterministicOrchestrationService implements OrchestrationService {
+  constructor(private readonly storage: AssetStorageService) {}
+
   async validateRelease(release: ReleaseDetailDto): Promise<NewFinding[]> {
     const findings: NewFinding[] = [];
     const video = this.latest(release, "VIDEO");
@@ -69,16 +80,32 @@ export class DeterministicOrchestrationService implements OrchestrationService {
     const assetId = typeof action.input.assetId === "string" ? action.input.assetId : "";
     const source = release.assets.find(({ id }) => id === assetId);
     if (!source) throw new Error("Source asset not found");
-    const sha256 = createHash("sha256").update(`${source.sha256}:repair:v1`).digest("hex");
+    const sourceBytes = await this.storage.read(source.uri);
+    let sourceContent: string;
+    try {
+      sourceContent = new TextDecoder("utf-8", { fatal: true }).decode(sourceBytes);
+    } catch {
+      throw new Error("Source subtitle must be valid UTF-8");
+    }
+    const mediaDurationMs = this.latest(release, "VIDEO")?.metadata.media;
+    const duration = mediaDurationMs && typeof mediaDurationMs === "object" && !Array.isArray(mediaDurationMs)
+      && typeof (mediaDurationMs as Record<string, unknown>).durationMs === "number"
+      ? (mediaDurationMs as Record<string, unknown>).durationMs as number
+      : undefined;
+    const repair = repairSrt(sourceContent, {
+      language: source.language ?? release.language,
+      ...(duration === undefined ? {} : { mediaDurationMs: duration }),
+    });
+    if (!repair.changed || !repair.validation.valid) throw new Error("Subtitle repair did not produce a valid changed asset");
     return {
-      output: { repaired: true, sourceAssetId: source.id, outputSha256: sha256 },
+      output: { repaired: true, sourceAssetId: source.id, changeCount: repair.changes.length, diff: repair.diff },
       asset: {
         kind: source.kind,
         language: source.language ?? undefined,
         fileName: source.fileName.replace(/(\.[^.]+)?$/, ".repaired$1"),
-        uri: `asset://${sha256}`,
-        sha256,
-        metadata: { ...source.metadata, parentAssetId: source.id, cpsExceeded: false, repairedBy: "deterministic-stub-v1" },
+        content: repair.content,
+        parentAssetId: source.id,
+        metadata: { cpsExceeded: false, repairedBy: "deterministic-srt-v1" },
       },
     };
   }

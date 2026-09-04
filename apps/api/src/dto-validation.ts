@@ -36,6 +36,14 @@ const optionalObject = (value: unknown, field: string): Record<string, unknown> 
   return result;
 };
 
+const assetKind = (value: unknown): AssetKind => {
+  const kind = requiredString(value, "kind") as AssetKind;
+  if (!["VIDEO", "SUBTITLE", "AUDIO", "POSTER", "METADATA", "RIGHTS", "DELIVERY_PACKAGE"].includes(kind)) {
+    throw new Error("kind is not supported");
+  }
+  return kind;
+};
+
 export const parseCreateRelease = (value: unknown): CreateReleaseInput => {
   const body = object(value);
   const platform = requiredString(body.platform, "platform") as Platform;
@@ -57,27 +65,44 @@ export const parseCreateRelease = (value: unknown): CreateReleaseInput => {
   };
 };
 
-export type ValidatedAssetInput = CreateAssetInput & { sha256?: string };
+export type ValidatedAssetInput = Omit<CreateAssetInput, "content" | "uri"> & { content: string };
+
+export interface ValidatedUploadAssetInput {
+  kind: AssetKind;
+  language?: string;
+  metadata?: Record<string, unknown>;
+}
 
 export const parseCreateAsset = (value: unknown): ValidatedAssetInput => {
   const body = object(value);
-  const kind = requiredString(body.kind, "kind") as AssetKind;
-  if (!["VIDEO", "SUBTITLE", "AUDIO", "POSTER", "METADATA", "RIGHTS", "DELIVERY_PACKAGE"].includes(kind)) {
-    throw new Error("kind is not supported");
-  }
-  const content = optionalString(body.content, "content", 2_000_000);
-  const uri = optionalString(body.uri, "uri", 2_048);
-  const sha256 = optionalString(body.sha256, "sha256", 64)?.toLowerCase();
-  if (!content && !(uri && sha256)) throw new Error("content, or uri with sha256, is required");
-  if (sha256 && !/^[a-f0-9]{64}$/.test(sha256)) throw new Error("sha256 must be a 64 character hexadecimal digest");
+  if (body.uri !== undefined || body.sha256 !== undefined) throw new Error("Client-declared uri and sha256 are not accepted");
+  if (typeof body.content !== "string" || body.content.length === 0) throw new Error("content is required");
+  if (Buffer.byteLength(body.content, "utf8") > 2_000_000) throw new Error("content must be at most 2000000 UTF-8 bytes");
   return {
-    kind,
+    kind: assetKind(body.kind),
     language: optionalString(body.language, "language", 32)?.toLowerCase(),
     fileName: requiredString(body.fileName, "fileName", 255),
-    content,
-    uri,
+    content: body.content,
     metadata: optionalObject(body.metadata, "metadata"),
-    sha256,
+  };
+};
+
+export const parseUploadAsset = (value: unknown): ValidatedUploadAssetInput => {
+  const body = object(value);
+  let metadata: Record<string, unknown> | undefined;
+  if (typeof body.metadata === "string") {
+    try {
+      metadata = optionalObject(JSON.parse(body.metadata), "metadata");
+    } catch (error) {
+      throw new Error(error instanceof SyntaxError ? "metadata must be a JSON object" : error instanceof Error ? error.message : "metadata is invalid");
+    }
+  } else {
+    metadata = optionalObject(body.metadata, "metadata");
+  }
+  return {
+    kind: assetKind(body.kind),
+    language: optionalString(body.language, "language", 32)?.toLowerCase(),
+    metadata,
   };
 };
 

@@ -5,7 +5,6 @@ import type {
   ApprovalDto,
   AssetDto,
   AuditEventDto,
-  CreateAssetInput,
   CreateReleaseInput,
   DeliveryAttemptDto,
   DeliveryStatus,
@@ -15,11 +14,14 @@ import type {
   ReleaseState,
   ReleaseSummaryDto,
 } from "@lrc/contracts";
-import type {
+import {
+  isAssetMutableState,
+  type AssetRegistrationResult,
   AuditFilter,
   NewAction,
   NewDelivery,
   NewFinding,
+  NewAssetRecord,
   ReleaseRecord,
   ReleaseRepository,
   WorkflowRunRecord,
@@ -102,26 +104,48 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     return copy(updated);
   }
 
-  async findAssetByHash(releaseId: string, sha256: string): Promise<AssetDto | undefined> {
-    const asset = [...this.assets.values()].find((candidate) => candidate.releaseId === releaseId && candidate.sha256 === sha256);
-    return asset ? copy(asset) : undefined;
+  async getAsset(id: string): Promise<AssetDto | undefined> {
+    return this.read(this.assets, id);
   }
 
-  async createAsset(releaseId: string, input: CreateAssetInput & { sha256: string; uri: string }): Promise<AssetDto> {
-    const asset: AssetDto = {
+  async registerAsset(
+    input: NewAssetRecord,
+    audit: { actor: string; sizeBytes: number },
+  ): Promise<AssetRegistrationResult> {
+    const release = this.releases.get(input.releaseId);
+    if (!release) throw new Error("Release not found during asset registration");
+    if (!isAssetMutableState(release.state)) return { outcome: "not_mutable", state: release.state };
+    const existing = [...this.assets.values()].find((candidate) => candidate.releaseId === input.releaseId
+      && candidate.kind === input.kind && candidate.language === (input.language ?? null)
+      && candidate.parentAssetId === (input.parentAssetId ?? null) && candidate.sha256 === input.sha256);
+    if (existing) return { outcome: "existing", asset: copy(existing) };
+    const asset = this.asset(input);
+    const event: AuditEventDto = {
       id: randomUUID(),
-      releaseId,
-      parentAssetId: typeof input.metadata?.parentAssetId === "string" ? input.metadata.parentAssetId : null,
+      releaseId: input.releaseId,
+      type: "asset.created",
+      actor: audit.actor,
+      payload: { assetId: asset.id, kind: asset.kind, fileName: asset.fileName, sha256: asset.sha256, sizeBytes: audit.sizeBytes },
+      occurredAt: new Date().toISOString(),
+    };
+    this.assets.set(asset.id, asset);
+    this.audit.set(event.id, event);
+    return { outcome: "created", asset: copy(asset) };
+  }
+
+  private asset(input: NewAssetRecord): AssetDto {
+    return {
+      id: randomUUID(),
+      releaseId: input.releaseId,
+      parentAssetId: input.parentAssetId ?? null,
       kind: input.kind,
       language: input.language ?? null,
       fileName: input.fileName,
       uri: input.uri,
       sha256: input.sha256,
-      metadata: input.metadata ?? {},
+      metadata: input.metadata,
       createdAt: new Date().toISOString(),
     };
-    this.assets.set(asset.id, asset);
-    return copy(asset);
   }
 
   async replaceFindings(releaseId: string, findings: NewFinding[]): Promise<FindingDto[]> {

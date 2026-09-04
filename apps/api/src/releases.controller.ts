@@ -1,13 +1,16 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
 import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto, WorkflowResultDto } from "@lrc/contracts";
 import { DtoValidationPipe, parseCreateAsset, parseCreateRelease, type ValidatedAssetInput } from "./dto-validation.js";
 import { ReleaseService } from "./release.service.js";
+import { AssetService } from "./asset.service.js";
 import { ReleaseWorkflowService } from "./workflow/release-workflow.service.js";
 import { CurrentPrincipal, RequireRoles, type AuthPrincipal } from "./auth/auth.js";
+import { UploadAssetGuard } from "./upload-asset.guard.js";
 
 @Controller("releases")
 export class ReleasesController {
-  constructor(private readonly releases: ReleaseService, private readonly workflow: ReleaseWorkflowService) {}
+  constructor(private readonly releases: ReleaseService, private readonly workflow: ReleaseWorkflowService, private readonly assets: AssetService) {}
 
   @Post()
   @RequireRoles("Operator")
@@ -38,7 +41,20 @@ export class ReleasesController {
     @Body(new DtoValidationPipe(parseCreateAsset)) input: ValidatedAssetInput,
     @CurrentPrincipal() principal: AuthPrincipal,
   ): Promise<AssetDto> {
-    return this.releases.addAsset(id, input, principal);
+    return this.assets.addContent(id, input, principal);
+  }
+
+  @Post(":id/assets/upload")
+  @RequireRoles("Operator")
+  @UseGuards(UploadAssetGuard)
+  @UseInterceptors(FileInterceptor("file"))
+  uploadAsset(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @UploadedFile() file: unknown,
+    @CurrentPrincipal() principal: AuthPrincipal,
+  ): Promise<AssetDto> {
+    return this.assets.addUpload(id, body, file, principal);
   }
 
   @Get(":id/findings")

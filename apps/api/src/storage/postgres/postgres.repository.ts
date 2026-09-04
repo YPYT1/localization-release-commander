@@ -8,7 +8,6 @@ import type {
   AssetDto,
   AssetKind,
   AuditEventDto,
-  CreateAssetInput,
   CreateReleaseInput,
   DeliveryAttemptDto,
   DeliveryStatus,
@@ -22,14 +21,20 @@ import type {
   ReleaseSummaryDto,
 } from "@lrc/contracts";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
-import type {
-  AuditFilter,
-  NewAction,
-  NewDelivery,
-  NewFinding,
-  ReleaseRecord,
-  ReleaseRepository,
-  WorkflowRunRecord,
+import {
+  AssetRegistrationUncertainError,
+  isAssetMutableState,
+  resolveAssetRegistrationVerification,
+  type AssetRegistrationResult,
+  type AssetAuditContext,
+  type NewAssetRecord,
+  type AuditFilter,
+  type NewAction,
+  type NewDelivery,
+  type NewFinding,
+  type ReleaseRecord,
+  type ReleaseRepository,
+  type WorkflowRunRecord,
 } from "../../domain/repository.js";
 
 interface ProjectRow extends QueryResultRow {
@@ -218,20 +223,99 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     return result.rows[0] ? this.release(result.rows[0]) : undefined;
   }
 
-  async findAssetByHash(releaseId: string, sha256: string): Promise<AssetDto | undefined> {
-    const result = await this.pool.query<AssetRow>(`SELECT ${ASSET_COLUMNS} FROM assets WHERE release_id = $1 AND sha256 = $2`, [releaseId, sha256]);
+  async getAsset(id: string): Promise<AssetDto | undefined> {
+    const result = await this.pool.query<AssetRow>(`SELECT ${ASSET_COLUMNS} FROM assets WHERE id = $1`, [id]);
     return result.rows[0] ? this.asset(result.rows[0]) : undefined;
   }
 
-  async createAsset(releaseId: string, input: CreateAssetInput & { sha256: string; uri: string }): Promise<AssetDto> {
-    const parentAssetId = typeof input.metadata?.parentAssetId === "string" ? input.metadata.parentAssetId : null;
-    const result = await this.pool.query<AssetRow>(
-      `INSERT INTO assets(id, release_id, parent_asset_id, kind, language, file_name, uri, sha256, metadata_json)
+  async registerAsset(
+    input: NewAssetRecord,
+    audit: AssetAuditContext,
+  ): Promise<AssetRegistrationResult> {
+    const client = await this.pool.connect();
+    let released = false;
+    let commitStarted = false;
+    try {
+      await client.query("BEGIN");
+      const locked = await client.query<{ state: ReleaseState }>("SELECT state FROM releases WHERE id = $1 FOR UPDATE", [input.releaseId]);
+      const state = locked.rows[0]?.state;
+      if (!state) throw new Error("Release not found during asset registration");
+      if (!isAssetMutableState(state)) {
+        await client.query("ROLLBACK");
+        return { outcome: "not_mutable", state };
+      }
+
+      const created = await this.insertAsset(client, input);
+      const asset = created ?? await this.findEquivalentAsset(client, input);
+      if (!asset) throw new Error("Asset conflict could not be resolved");
+      if (!created) {
+        await client.query("ROLLBACK");
+        return { outcome: "existing", asset };
+      }
+
+      await client.query(
+        `INSERT INTO audit_events(id, release_id, type, actor, payload_json) VALUES ($1, $2, 'asset.created', $3, $4::jsonb)`,
+        [randomUUID(), input.releaseId, audit.actor, JSON.stringify({
+          assetId: asset.id,
+          kind: asset.kind,
+          fileName: asset.fileName,
+          sha256: asset.sha256,
+          sizeBytes: audit.sizeBytes,
+        })],
+      );
+      commitStarted = true;
+      await client.query("COMMIT");
+      return { outcome: "created", asset };
+    } catch (error) {
+      if (commitStarted) {
+        client.release(true);
+        released = true;
+        try {
+          const verified = await this.verifyEquivalentAsset(input);
+          return resolveAssetRegistrationVerification(input, verified, error);
+        } catch (verificationError) {
+          if (verificationError instanceof AssetRegistrationUncertainError) throw verificationError;
+          throw new AssetRegistrationUncertainError(verificationError);
+        }
+      }
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      if (!released) client.release();
+    }
+  }
+
+  private async insertAsset(
+    client: DatabaseClient,
+    input: NewAssetRecord,
+  ): Promise<AssetDto | undefined> {
+    const result = await client.query<AssetRow>(
+       `INSERT INTO assets(id, release_id, parent_asset_id, kind, language, file_name, uri, sha256, metadata_json)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-       ON CONFLICT (release_id, sha256) DO UPDATE SET sha256 = assets.sha256 RETURNING ${ASSET_COLUMNS}`,
-      [randomUUID(), releaseId, parentAssetId, input.kind, input.language ?? null, input.fileName, input.uri, input.sha256, JSON.stringify(input.metadata ?? {})],
+       ON CONFLICT (release_id, kind, (COALESCE(language, '')), (COALESCE(parent_asset_id, '00000000-0000-0000-0000-000000000000'::uuid)), sha256)
+       DO NOTHING RETURNING ${ASSET_COLUMNS}`,
+      [randomUUID(), input.releaseId, input.parentAssetId ?? null, input.kind, input.language ?? null, input.fileName, input.uri, input.sha256, JSON.stringify(input.metadata)],
     );
-    return this.asset(result.rows[0]!);
+    return result.rows[0] ? this.asset(result.rows[0]) : undefined;
+  }
+
+  private async findEquivalentAsset(client: DatabaseClient, input: NewAssetRecord): Promise<AssetDto | undefined> {
+    const result = await client.query<AssetRow>(
+      `SELECT ${ASSET_COLUMNS} FROM assets
+       WHERE release_id = $1 AND kind = $2 AND COALESCE(language, '') = $3
+         AND parent_asset_id IS NOT DISTINCT FROM $4::uuid AND sha256 = $5`,
+      [input.releaseId, input.kind, input.language ?? "", input.parentAssetId ?? null, input.sha256],
+    );
+    return result.rows[0] ? this.asset(result.rows[0]) : undefined;
+  }
+
+  private async verifyEquivalentAsset(input: NewAssetRecord): Promise<AssetDto | undefined> {
+    const client = await this.pool.connect();
+    try {
+      return await this.findEquivalentAsset(client, input);
+    } finally {
+      client.release();
+    }
   }
 
   async replaceFindings(releaseId: string, findings: NewFinding[]): Promise<FindingDto[]> {
