@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
-import type { AssetDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
+import type { ActionDto, ApprovalDto, AssetDto, DeliveryAttemptDto, ReleaseDetailDto, ReleaseSummaryDto, WorkflowResultDto } from "@lrc/contracts";
 import { AppModule } from "./app.module.js";
 
 async function withApi(run: (baseUrl: string) => Promise<void>): Promise<void> {
@@ -115,5 +115,129 @@ test("read models expose findings, timeline, audit, rules, settings, and dashboa
     const settings = (await (await fetch(`${baseUrl}/settings`)).json()) as { retentionDays: number; connections: Array<Record<string, unknown>> };
     assert.equal(settings.retentionDays, 730);
     assert.equal(JSON.stringify(settings).includes("secret"), false);
+  });
+});
+
+test("a valid release requires approval before one idempotent delivery submission", async () => {
+  await withApi(async (baseUrl) => {
+    const releaseResponse = await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
+    });
+    const release = (await releaseResponse.json()) as ReleaseSummaryDto;
+    for (const asset of [
+      { kind: "VIDEO", fileName: "episode-8.mp4", content: "video" },
+      { kind: "SUBTITLE", language: "en", fileName: "episode-8.srt", content: "subtitle" },
+    ]) {
+      await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(asset),
+      });
+    }
+
+    const runResponse = await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" });
+    assert.equal(runResponse.status, 201);
+    const run = (await runResponse.json()) as WorkflowResultDto;
+    assert.equal(run.state, "READY_FOR_APPROVAL");
+    assert.equal(run.action?.risk, "R2");
+
+    const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    const delivery = detail.deliveries[0];
+    assert.equal(delivery?.status, "PENDING");
+
+    const staleManifestAttempt = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "POSTER", fileName: "late-poster.jpg", content: "poster" }),
+    });
+    assert.equal(staleManifestAttempt.status, 409);
+
+    const blockedSubmit = await fetch(`${baseUrl}/deliveries/${delivery.id}/submit`, { method: "POST" });
+    assert.equal(blockedSubmit.status, 409);
+
+    const approvalResponse = await fetch(`${baseUrl}/actions/${run.action?.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-actor-id": "release-manager" },
+      body: JSON.stringify({ reason: "QC evidence reviewed" }),
+    });
+    assert.equal(approvalResponse.status, 201);
+    const approval = (await approvalResponse.json()) as ApprovalDto;
+    assert.equal(approval.decision, "APPROVED");
+
+    const submitResponse = await fetch(`${baseUrl}/deliveries/${delivery.id}/submit`, { method: "POST", headers: { "x-actor-id": "release-manager" } });
+    assert.equal(submitResponse.status, 201);
+    const submitted = (await submitResponse.json()) as DeliveryAttemptDto;
+    assert.equal(submitted.status, "SUBMITTED");
+    assert.equal(submitted.requestId.length > 0, true);
+
+    const retried = (await (await fetch(`${baseUrl}/deliveries/${delivery.id}/retry`, { method: "POST" })).json()) as DeliveryAttemptDto;
+    assert.equal(retried.requestId, submitted.requestId);
+    const finalDetail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.equal(finalDetail.deliveries.length, 1);
+    assert.equal(finalDetail.state, "SUBMITTED");
+  });
+});
+
+test("a repair action is executable and a rejected submission remains blocked", async () => {
+  await withApi(async (baseUrl) => {
+    const releaseResponse = await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 9", territory: "JP", platform: "OTT", language: "ja" }),
+    });
+    const release = (await releaseResponse.json()) as ReleaseSummaryDto;
+    for (const asset of [
+      { kind: "VIDEO", fileName: "episode-9.mp4", content: "video" },
+      { kind: "SUBTITLE", language: "ja", fileName: "episode-9.srt", content: "subtitle", metadata: { cpsExceeded: true } },
+    ]) {
+      await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(asset),
+      });
+    }
+
+    const repairRun = (await (await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" })).json()) as WorkflowResultDto;
+    assert.equal(repairRun.state, "REMEDIATING");
+    assert.equal(repairRun.action?.risk, "R1");
+
+    const executedResponse = await fetch(`${baseUrl}/actions/${repairRun.action?.id}/execute`, { method: "POST", headers: { "x-actor-id": "localizer" } });
+    assert.equal(executedResponse.status, 201);
+    const executed = (await executedResponse.json()) as ActionDto;
+    assert.equal(executed.status, "COMPLETED");
+
+    const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.equal(detail.assets.filter(({ kind }) => kind === "SUBTITLE").length, 2);
+    const submitAction = detail.actions.find(({ type }) => type === "SUBMIT_DELIVERY");
+    assert.equal(submitAction?.status, "PENDING_APPROVAL");
+
+    const rejectedResponse = await fetch(`${baseUrl}/actions/${submitAction?.id}/reject`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-actor-id": "release-manager" },
+      body: JSON.stringify({ reason: "Rights evidence is incomplete" }),
+    });
+    assert.equal(rejectedResponse.status, 201);
+    const rejected = (await rejectedResponse.json()) as ApprovalDto;
+    assert.equal(rejected.decision, "REJECTED");
+    const blocked = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.equal(blocked.state, "BLOCKED");
+  });
+});
+
+test("validation blocks a release with missing required assets", async () => {
+  await withApi(async (baseUrl) => {
+    const releaseResponse = await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 10", territory: "BR", platform: "OTT", language: "es" }),
+    });
+    const release = (await releaseResponse.json()) as ReleaseSummaryDto;
+    const validationResponse = await fetch(`${baseUrl}/releases/${release.id}/validate`, { method: "POST" });
+    assert.equal(validationResponse.status, 201);
+    const validation = (await validationResponse.json()) as WorkflowResultDto;
+    assert.equal(validation.state, "BLOCKED");
+    assert.deepEqual(validation.findings.map(({ code }) => code).sort(), ["SUBTITLE_REQUIRED", "VIDEO_REQUIRED"]);
   });
 });

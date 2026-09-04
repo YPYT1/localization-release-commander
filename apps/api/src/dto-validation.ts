@@ -79,3 +79,12 @@ export const parseCreateAsset = (value: unknown): ValidatedAssetInput => {
     sha256,
   };
 };
+
+export interface DecisionInput {
+  reason: string;
+}
+
+export const parseDecision = (value: unknown): DecisionInput => {
+  const body = object(value);
+  return { reason: requiredString(body.reason, "reason", 1_000) };
+};

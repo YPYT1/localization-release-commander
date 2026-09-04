@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
 import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseRepository } from "./domain/repository.js";
 import type { ValidatedAssetInput } from "./dto-validation.js";
@@ -36,7 +36,11 @@ export class ReleaseService {
   }
 
   async addAsset(releaseId: string, input: ValidatedAssetInput): Promise<AssetDto> {
-    if (!(await this.repository.getReleaseRecord(releaseId))) throw new NotFoundException("Release not found");
+    const release = await this.repository.getReleaseRecord(releaseId);
+    if (!release) throw new NotFoundException("Release not found");
+    if (!["DRAFT", "BLOCKED", "REMEDIATING", "NEEDS_HUMAN"].includes(release.state)) {
+      throw new ConflictException(`Assets cannot be changed while release is ${release.state}`);
+    }
     const sha256 = input.sha256 ?? createHash("sha256").update(input.content ?? "", "utf8").digest("hex");
     const existing = await this.repository.findAssetByHash(releaseId, sha256);
     if (existing) return existing;

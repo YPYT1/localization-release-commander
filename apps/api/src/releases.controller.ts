@@ -1,11 +1,13 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from "@nestjs/common";
-import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
+import { Headers } from "@nestjs/common";
+import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto, WorkflowResultDto } from "@lrc/contracts";
 import { DtoValidationPipe, parseCreateAsset, parseCreateRelease, type ValidatedAssetInput } from "./dto-validation.js";
 import { ReleaseService } from "./release.service.js";
+import { ReleaseWorkflowService } from "./workflow/release-workflow.service.js";
 
 @Controller("releases")
 export class ReleasesController {
-  constructor(private readonly releases: ReleaseService) {}
+  constructor(private readonly releases: ReleaseService, private readonly workflow: ReleaseWorkflowService) {}
 
   @Post()
   create(@Body(new DtoValidationPipe(parseCreateRelease)) input: CreateReleaseInput): Promise<ReleaseSummaryDto> {
@@ -41,5 +43,21 @@ export class ReleasesController {
     @Query("after") after?: string,
   ): Promise<Array<AuditEventDto & { summary: string }>> {
     return this.releases.getTimeline(id, after);
+  }
+
+  @Post(":id/validate")
+  validate(
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Headers("x-actor-id") actor = "demo-operator",
+  ): Promise<WorkflowResultDto> {
+    return this.workflow.validateRelease(id, actor);
+  }
+
+  @Post(":id/run")
+  run(
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Headers("x-actor-id") actor = "demo-operator",
+  ): Promise<WorkflowResultDto> {
+    return this.workflow.runRelease(id, actor);
   }
 }
