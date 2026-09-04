@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { addAssetAction, createReleaseAction, initialFormState, runReleaseAction } from "@/app/app/actions";
+import { addAssetAction, createReleaseAction, decideActionAction, deliveryAction, executeActionAction, initialFormState, runReleaseAction } from "@/app/app/actions";
 import type { RuleSetDto } from "@/lib/api";
 
 function Feedback({ state }: { state: typeof initialFormState }) {
@@ -41,4 +41,22 @@ export function RunReleaseButton({ releaseId }: { releaseId: string }) {
   const bound = runReleaseAction.bind(null, releaseId);
   const [state, action, pending] = useActionState(bound, initialFormState);
   return <form className="inline-action-form" action={action}><button className="primary-button" disabled={pending}>{pending ? "正在运行…" : "运行交付检查"}</button><Feedback state={state} /></form>;
+}
+
+export function ExecuteActionForm({ actionId, releaseId }: { actionId: string; releaseId: string }) {
+  const bound = executeActionAction.bind(null, actionId, releaseId);
+  const [state, action, pending] = useActionState(bound, initialFormState);
+  return <form className="operation-form compact-operation" action={action}><button className="primary-button" disabled={pending}>{pending ? "执行中…" : "执行可逆动作"}</button><Feedback state={state} /></form>;
+}
+
+export function ApprovalDecisionForm({ actionId, releaseId, decision }: { actionId: string; releaseId: string; decision: "approve" | "reject" }) {
+  const bound = decideActionAction.bind(null, actionId, releaseId, decision);
+  const [state, action, pending] = useActionState(bound, initialFormState);
+  return <form className={`operation-form ${decision}`} action={action}><label><span>{decision === "approve" ? "批准依据" : "拒绝原因"} *</span><textarea name="reason" required minLength={3} placeholder={decision === "approve" ? "说明已核对的证据与适用范围" : "说明缺少的证据或不可接受的风险"} /></label><label className="confirm-field"><input type="checkbox" name="confirmed" value="yes" required /><span>我已查看动作输入、影响与回滚条件</span></label><button className={decision === "approve" ? "primary-button" : "danger-button"} disabled={pending}>{pending ? "提交决定中…" : decision === "approve" ? "批准动作" : "拒绝动作"}</button><Feedback state={state} /></form>;
+}
+
+export function DeliveryActionForm({ deliveryId, releaseId, retry = false }: { deliveryId: string; releaseId: string; retry?: boolean }) {
+  const bound = deliveryAction.bind(null, deliveryId, releaseId, retry);
+  const [state, action, pending] = useActionState(bound, initialFormState);
+  return <form className="operation-form delivery-operation" action={action}><label className="confirm-field"><input type="checkbox" name="confirmed" value="yes" required /><span>确认调用真实 provider adapter；重复请求由幂等键保护</span></label><button className="primary-button" disabled={pending}>{pending ? "请求中…" : retry ? "重试平台提交" : "提交到平台"}</button><Feedback state={state} /></form>;
 }

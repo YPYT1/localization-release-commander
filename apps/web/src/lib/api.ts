@@ -1,8 +1,11 @@
 import type {
+  ActionDto,
+  ApprovalDto,
   AssetDto,
   AuditEventDto,
   CreateAssetInput,
   CreateReleaseInput,
+  DeliveryAttemptDto,
   FindingDto,
   HealthDto,
   ReleaseDetailDto,
@@ -30,7 +33,15 @@ export interface RuleSetDto {
   updatedAt: string;
 }
 
-export type CreateReleasePayload = CreateReleaseInput & { ruleSetId: string };
+export interface WorkspaceSettingsDto {
+  workspaceName: string;
+  environment: string;
+  retentionDays: number;
+  members: Array<{ id: string; name: string; email: string; role: string }>;
+  connections: Array<{ id: string; provider: string; status: string; identifier: string }>;
+}
+
+export type CreateReleasePayload = CreateReleaseInput;
 
 function failure(status: number, message: string): ApiResult<never> {
   if (status === 403) return { ok: false, kind: "forbidden", message, status };
@@ -103,6 +114,11 @@ export const api = {
   createRelease: (input: CreateReleasePayload) => request<ReleaseSummaryDto>("/releases", { method: "POST", body: JSON.stringify(input) }),
   addAsset: (releaseId: string, input: CreateAssetInput & { sha256?: string }) => request<AssetDto>(`/releases/${encodeURIComponent(releaseId)}/assets`, { method: "POST", body: JSON.stringify(input) }),
   runRelease: (releaseId: string) => request<WorkflowResultDto>(`/releases/${encodeURIComponent(releaseId)}/run`, { method: "POST", headers: { "x-actor-id": "web-operator" } }),
+  executeAction: (actionId: string) => request<ActionDto>(`/actions/${encodeURIComponent(actionId)}/execute`, { method: "POST", headers: { "x-actor-id": "web-operator" } }),
+  decideAction: (actionId: string, decision: "approve" | "reject", reason: string) => request<ApprovalDto>(`/actions/${encodeURIComponent(actionId)}/${decision}`, { method: "POST", headers: { "x-actor-id": "web-release-manager" }, body: JSON.stringify({ reason }) }),
+  submitDelivery: (deliveryId: string, retry = false) => request<DeliveryAttemptDto>(`/deliveries/${encodeURIComponent(deliveryId)}/${retry ? "retry" : "submit"}`, { method: "POST", headers: { "x-actor-id": "web-release-manager" } }),
+  audit: (query = "") => listRequest<AuditEventDto>(`/audit${query}`, "events"),
+  settings: () => request<WorkspaceSettingsDto>("/settings"),
 };
 
 export function apiFailureLabel(result: Extract<ApiResult<unknown>, { ok: false }>) {
