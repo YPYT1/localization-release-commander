@@ -6,7 +6,8 @@
     "dev": "nest start --watch --entryFile main",
     "build": "nest build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "tsc --noEmit -p tsconfig.json"
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "pnpm build && node --test dist/api.e2e.test.js"
   },
   "dependencies": {
     "@lrc/contracts": "workspace:*",
