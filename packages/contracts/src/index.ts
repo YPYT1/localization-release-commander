@@ -7,6 +7,7 @@ export const releaseStates = [
   "READY_FOR_APPROVAL",
   "APPROVED",
   "SUBMITTING",
+  "RETRY_WAIT",
   "SUBMITTED",
   "QC_PASSED",
   "QC_FAILED",
