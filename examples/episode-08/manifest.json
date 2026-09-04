@@ -1,0 +1,12 @@
+{
+  "projectName": "潮汐之后",
+  "episode": "第 8 集",
+  "territory": "BR",
+  "platform": "OTT",
+  "language": "es",
+  "evaluationAt": "2026-09-04T12:00:00.000Z",
+  "assets": [
+    { "kind": "SUBTITLE", "fileName": "es-overlap.srt", "language": "es" },
+    { "kind": "RIGHTS", "fileName": "rights.json" }
+  ]
+}

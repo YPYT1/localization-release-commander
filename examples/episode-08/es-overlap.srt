@@ -1,0 +1,8 @@
+1
+00:00:01,000 --> 00:00:03,000
+El puerto está tranquilo esta noche.
+
+2
+00:00:02,800 --> 00:00:05,000
+Nos iremos antes de que cambie la marea.
+
