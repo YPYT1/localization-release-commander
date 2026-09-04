@@ -1,19 +1,22 @@
 "use client";
 
 import { useActionState } from "react";
-import { addAssetAction, createReleaseAction, decideActionAction, deliveryAction, executeActionAction, initialFormState, runReleaseAction } from "@/app/app/actions";
-import type { RuleSetDto } from "@/lib/api";
+import { addAssetAction, createReleaseAction, decideActionAction, deliveryAction, executeActionAction, runReleaseAction, type FormState } from "@/app/app/actions";
+import type { AuthPrincipal, RuleSetDto } from "@/lib/api";
 
-function Feedback({ state }: { state: typeof initialFormState }) {
+const initialFormState: FormState = { status: "idle", message: "" };
+
+function Feedback({ state }: { state: FormState }) {
   if (state.status === "idle") return null;
   return <p className={`form-feedback ${state.status}`} role="status" aria-live="polite">{state.message}</p>;
 }
 
-export function CreateReleaseForm({ ruleSets }: { ruleSets: RuleSetDto[] }) {
+export function CreateReleaseForm({ ruleSets, principal }: { ruleSets: RuleSetDto[]; principal: AuthPrincipal }) {
   const [state, action, pending] = useActionState(createReleaseAction, initialFormState);
+  const admin = principal.roles.includes("Admin");
   return <form className="release-form" action={action}>
     <fieldset><legend><span>01</span> 内容与目标</legend><div className="field-grid">
-      <label><span>项目名称</span><input name="projectName" defaultValue="Northline Shorts" autoComplete="organization" /></label>
+      {admin ? <label><span>新项目名称</span><input name="projectName" defaultValue="Northline Shorts" autoComplete="organization" /></label> : <label><span>Project ID</span><input name="projectId" value={principal.projectIds[0]} readOnly /></label>}
       <label><span>集数 *</span><input name="episode" placeholder="例如：第 8 集" required /></label>
       <label><span>目标地区 *</span><select name="territory" required defaultValue=""><option value="" disabled>选择地区</option><option value="US">美国 / US</option><option value="BR">巴西 / BR</option><option value="JP">日本 / JP</option><option value="GLOBAL">全球 / GLOBAL</option></select></label>
       <label><span>目标平台 *</span><select name="platform" defaultValue="YOUTUBE"><option value="YOUTUBE">YouTube</option><option value="OTT">OTT</option></select></label>

@@ -3,6 +3,7 @@ import { WorkspaceHeading } from "@/components/app-shell";
 import { ConnectionNotice, EmptyState } from "@/components/data-states";
 import { ReleaseTable } from "@/components/release-views";
 import { api } from "@/lib/api";
+import { hasRole } from "@/lib/api";
 
 export default async function ReleasesPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const params = await searchParams;
@@ -12,10 +13,11 @@ export default async function ReleasesPage({ searchParams }: { searchParams: Pro
     if (typeof value === "string" && value) query.set(key, value);
   }
   const suffix = query.size ? `?${query.toString()}` : "";
-  const result = await api.releases(suffix);
+  const [result, identity] = await Promise.all([api.releases(suffix), api.me()]);
+  const canOperate = identity.ok && hasRole(identity.data, "Operator");
 
   return <>
-    <WorkspaceHeading eyebrow="RELEASES / ALL" title="交付版本" detail="按集、地区和平台追踪从 DRAFT 到 COMPLETED 的每次交付。" action={<Link className="primary-button" href="/app/releases/new">创建 Release</Link>} />
+    <WorkspaceHeading eyebrow="RELEASES / ALL" title="交付版本" detail="按集、地区和平台追踪从 DRAFT 到 COMPLETED 的每次交付。" action={canOperate ? <Link className="primary-button" href="/app/releases/new">创建 Release</Link> : undefined} />
     <form className="filter-bar" method="get" role="search">
       <label><span className="sr-only">搜索</span><input type="search" name="search" defaultValue={typeof params.search === "string" ? params.search : ""} placeholder="搜索集数或 Release ID" /></label>
       <label><span className="sr-only">状态</span><select name="state" defaultValue={typeof params.state === "string" ? params.state : ""}><option value="">所有状态</option><option value="BLOCKED">BLOCKED</option><option value="NEEDS_HUMAN">NEEDS HUMAN</option><option value="VALIDATING">VALIDATING</option><option value="QC_PASSED">QC PASSED</option><option value="COMPLETED">COMPLETED</option></select></label>

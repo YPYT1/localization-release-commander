@@ -26,3 +26,7 @@ export function EmptyState({ title, message, action }: { title: string; message:
     </section>
   );
 }
+
+export function RoleNotice({ role, message }: { role: string; message?: string }) {
+  return <section className="connection-notice role-notice" role="status"><div><span className="section-index">ROLE / REQUIRED</span><h2>需要 {role}</h2></div><div><p>{message ?? `当前登录身份没有 ${role} 角色。界面已隐藏相关动作，API 仍会在服务端执行最终授权。`}</p><Link className="text-link" href="/login">退出并切换演示身份 →</Link></div></section>;
+}

@@ -1,32 +1,26 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import type { ApiResult } from "@/lib/api";
+import { logoutAction } from "@/app/auth-actions";
+import { AppNavigation } from "@/components/app-navigation";
+import type { ApiResult, AuthPrincipal } from "@/lib/api";
 import type { HealthDto } from "@lrc/contracts";
 
-const navigation = [
-  ["/app", "总览", "01"],
-  ["/app/releases", "交付版本", "02"],
-  ["/app/rulesets", "规则集", "03"],
-  ["/app/audit", "审计", "04"],
-  ["/app/settings", "设置", "05"],
-] as const;
-
-export function AppShell({ children, health }: { children: ReactNode; health: ApiResult<HealthDto> }) {
+export function AppShell({ children, health, principal }: { children: ReactNode; health: ApiResult<HealthDto>; principal: AuthPrincipal | null }) {
+  const project = principal?.roles.includes("Admin") ? "所有项目" : principal?.projectIds[0] ? `Project ${principal.projectIds[0].slice(0, 8)}…` : "未绑定项目";
+  const initials = principal?.id.split("-").slice(-2).map((part) => part[0]).join("").toUpperCase() || "—";
   return (
     <div className="workspace-shell">
       <aside className="workspace-sidebar">
         <Link href="/" className="workspace-brand"><span>LRC</span><small>Release Commander</small></Link>
-        <div className="project-switcher"><span>当前项目</span><strong>Northline Studios</strong><small>SHORT DRAMA / PROD</small></div>
-        <nav aria-label="工作台导航">
-          {navigation.map(([href, label, index]) => <Link key={href} href={href}><span>{index}</span>{label}</Link>)}
-        </nav>
+        <div className="project-switcher"><span>访问范围</span><strong>{project}</strong><small>{principal?.roles.join(" / ") || "IDENTITY UNAVAILABLE"}</small></div>
+        <AppNavigation principal={principal} />
         <div className="sidebar-foot"><span className={`connection-dot ${health.ok ? "online" : "offline"}`} />{health.ok ? "API 已连接" : "API 未连接"}</div>
       </aside>
       <div className="workspace-main">
         <header className="workspace-topbar">
-          <div><span className="environment-mark">PRODUCTION</span><span>内容出海交付</span></div>
-          <form className="global-search" role="search"><label className="sr-only" htmlFor="global-search">搜索 Release、资产或 Finding</label><input id="global-search" type="search" placeholder="搜索 Release、资产或 Finding" /></form>
-          <div className="operator"><span>LW</span><div><strong>Lin Wang</strong><small>Release Manager</small></div></div>
+          <div><span className="environment-mark">DEMO SESSION</span><span>内容出海交付</span></div>
+          <form className="global-search" role="search" action="/app/releases" method="get"><label className="sr-only" htmlFor="global-search">搜索 Release</label><input id="global-search" name="search" type="search" placeholder="搜索 Release" /></form>
+          <div className="operator"><span>{initials}</span><div><strong>{principal?.id || "身份服务不可用"}</strong><small>{principal?.roles.join(" · ") || "No role"}</small></div><form action={logoutAction}><button type="submit">退出</button></form></div>
         </header>
         <main id="main-content" className="workspace-content">{children}</main>
       </div>

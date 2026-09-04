@@ -22,7 +22,7 @@ export function ReleaseTable({ releases }: { releases: ReleaseSummaryDto[] }) {
 }
 
 export function ReleaseHeader({ release }: { release: ReleaseDetailDto }) {
-  return <header className="release-header"><div><span className="section-index">RELEASE / {release.id}</span><h1>{release.episode} · {release.territory}</h1><p>{release.language} / {release.platform} · manifest v{release.version}</p></div><div className="release-header-state"><StatusBadge value={release.state} /><span>截止 {release.deadline ? new Date(release.deadline).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" }) : "未设置"}</span></div></header>;
+  return <header className="release-header"><div><span className="section-index">RELEASE / {release.id}</span><h1>{release.episode} · {release.territory}</h1><p>{release.language} / {release.platform} · manifest v{release.version} · Project {release.projectId}</p></div><div className="release-header-state"><StatusBadge value={release.state} /><span>截止 {release.deadline ? new Date(release.deadline).toLocaleString("zh-CN", { dateStyle: "medium", timeStyle: "short" }) : "未设置"}</span></div></header>;
 }
 
 export function ReleaseTabs({ releaseId, current }: { releaseId: string; current: "overview" | "findings" | "approvals" }) {

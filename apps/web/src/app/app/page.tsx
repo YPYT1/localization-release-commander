@@ -4,9 +4,11 @@ import { ReleaseTable } from "@/components/release-views";
 import { StatusBadge } from "@/components/status-badge";
 import { WorkspaceHeading } from "@/components/app-shell";
 import { api } from "@/lib/api";
+import { hasRole } from "@/lib/api";
 
 export default async function Workspace() {
-  const result = await api.releases();
+  const [result, identity] = await Promise.all([api.releases(), api.me()]);
+  const canOperate = identity.ok && hasRole(identity.data, "Operator");
 
   if (!result.ok) {
     return <><WorkspaceHeading eyebrow="TODAY / CONTROL ROOM" title="交付总览" detail="阻断、审批和平台回执汇总。" /><ConnectionNotice result={result} /></>;
@@ -19,7 +21,7 @@ export default async function Workspace() {
   const completed = releases.filter((release) => release.state === "COMPLETED" || release.state === "QC_PASSED");
 
   return <>
-    <WorkspaceHeading eyebrow="TODAY / CONTROL ROOM" title="交付总览" detail="阻断、审批和平台回执汇总。" action={<Link className="primary-button" href="/app/releases/new">创建 Release</Link>} />
+    <WorkspaceHeading eyebrow="TODAY / CONTROL ROOM" title="交付总览" detail="阻断、审批和平台回执汇总。" action={canOperate ? <Link className="primary-button" href="/app/releases/new">创建 Release</Link> : undefined} />
     <section className="metric-strip" aria-label="交付指标">
       <div><span>阻断项</span><strong>{blocked.length.toString().padStart(2, "0")}</strong><small>需要先处理</small></div>
       <div><span>待审批</span><strong>{approvals.length.toString().padStart(2, "0")}</strong><small>R2 / R3 动作</small></div>
