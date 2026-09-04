@@ -16,16 +16,24 @@
 ## REST 最小接口
 
 ```text
+POST   /auth/demo-login
+GET    /auth/me
 POST   /releases
 GET    /releases/:id
+POST   /releases/:id/assets
 POST   /releases/:id/validate
 POST   /releases/:id/run
 GET    /releases/:id/timeline
 GET    /releases/:id/findings
 POST   /actions/:id/approve
 POST   /actions/:id/reject
+POST   /deliveries/:id/submit
 POST   /deliveries/:id/retry
 ```
+
+除 `GET /health` 与受限的 `POST /auth/demo-login` 外，接口均要求 `Authorization: Bearer <JWT>`。JWT 的 `sub`、`roles` 与 `projectIds` 是服务端授权事实；客户端提交的 actor、角色或项目范围不能覆盖它们。
+
+`POST /auth/demo-login` 只用于本地演示：必须显式设置 `DEMO_AUTH_ENABLED=true`，并且在 `NODE_ENV=production` 时固定返回 404。它只接受服务端内置 persona，签发 1 小时会话且响应使用 `Cache-Control: no-store`。
 
 ## 事件
 

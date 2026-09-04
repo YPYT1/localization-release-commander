@@ -2,7 +2,9 @@
 
 ## 权限
 
-采用 RBAC：Operator、Localizer、Rights、Approver、Admin。平台凭证只在 adapter 服务端使用，模型上下文只得到最小化的资产元数据和已脱敏文本。
+采用 JWT + RBAC：Operator、Localizer、Rights、Approver、ReleaseManager、Admin。JWT 必须由服务端校验签名、签发方、受众、有效期、角色和项目范围；资源访问还要再次校验 `projectIds`，不能信任客户端提交的 actor 或角色。平台凭证只在 adapter 服务端使用，模型上下文只得到最小化的资产元数据和已脱敏文本。
+
+本地演示登录默认关闭，只在 `DEMO_AUTH_ENABLED=true` 且非生产环境时可用。persona 是固定白名单，客户端不能注入 `sub` 或 `roles`；生产环境无论配置如何都隐藏该接口。浏览器会话使用 HttpOnly Cookie 保存短期 JWT，真正的生产动作仍由 NestJS API 逐次授权。
 
 ## 风险分级
 
