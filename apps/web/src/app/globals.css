@@ -1,0 +1,22 @@
+:root { --ink: #111110; --paper: #f5f2ea; --amber: #efad37; --muted: #89857d; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ink); color: var(--paper); font-family: Arial, Helvetica, sans-serif; }
+a { color: inherit; text-decoration: none; }
+main { min-height: 100vh; }
+.hero { min-height: 100svh; padding: 28px max(28px, calc((100vw - 1180px) / 2)); display: grid; align-content: space-between; background: radial-gradient(circle at 80% 22%, #4e3520 0, transparent 36%), var(--ink); }
+.nav, .status, .row { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.brand { font-weight: 700; letter-spacing: -.04em; }
+.nav a { color: var(--muted); font-size: 14px; }
+.heroCopy { max-width: 760px; padding: 10vh 0; }
+h1 { font-size: clamp(58px, 10vw, 150px); letter-spacing: -.08em; line-height: .86; margin: 0; }
+p { color: #c4bfb3; font-size: 18px; line-height: 1.55; max-width: 560px; }
+.actions { display: flex; gap: 12px; margin-top: 32px; }
+.button { background: var(--amber); color: var(--ink); padding: 12px 18px; font-weight: 700; border-radius: 4px; }
+.buttonSecondary { border: 1px solid #5d5951; padding: 12px 18px; border-radius: 4px; }
+.status { border-top: 1px solid #3a3833; padding-top: 18px; color: var(--muted); font-size: 13px; }
+.app { background: var(--paper); color: var(--ink); min-height: 100vh; padding: 28px max(28px, calc((100vw - 1180px) / 2)); }
+.app p { color: #615e58; }
+.table { border-top: 1px solid #d6d0c5; margin-top: 48px; }
+.row { min-height: 72px; border-bottom: 1px solid #d6d0c5; }
+.state { font-size: 12px; font-weight: 700; color: #8b5d13; }
+@media (max-width: 700px) { .navLinks { display: none; } .row { align-items: flex-start; flex-direction: column; padding: 14px 0; gap: 6px; } }
