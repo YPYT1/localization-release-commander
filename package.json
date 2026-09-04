@@ -9,7 +9,7 @@
     "build": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/api build && pnpm --filter @lrc/worker build && pnpm --filter @lrc/web build",
     "typecheck": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/api typecheck && pnpm --filter @lrc/worker typecheck && pnpm --filter @lrc/web typecheck",
     "test": "pnpm --filter @lrc/worker test",
-    "lint": "pnpm --filter @lrc/web lint && pnpm --filter @lrc/api lint && pnpm --filter @lrc/worker lint"
+    "lint": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/web lint && pnpm --filter @lrc/api lint && pnpm --filter @lrc/worker lint"
   },
   "devDependencies": {
     "typescript": "6.0.3"
