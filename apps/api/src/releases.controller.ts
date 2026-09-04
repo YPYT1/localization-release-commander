@@ -10,7 +10,7 @@ export class ReleasesController {
   constructor(private readonly releases: ReleaseService, private readonly workflow: ReleaseWorkflowService) {}
 
   @Post()
-  create(@Body(new DtoValidationPipe(parseCreateRelease)) input: CreateReleaseInput): Promise<ReleaseSummaryDto> {
+  create(@Body(new DtoValidationPipe(parseCreateRelease)) input: CreateReleaseInput): Promise<ReleaseDetailDto> {
     return this.releases.createRelease(input);
   }
 

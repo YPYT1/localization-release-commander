@@ -21,6 +21,7 @@ export const RELEASE_REPOSITORY = Symbol("RELEASE_REPOSITORY");
 
 export interface ReleaseRecord extends ReleaseSummaryDto {
   projectId: string;
+  ruleSetId: string;
   deadline: string | null;
   version: number;
   createdAt: string;

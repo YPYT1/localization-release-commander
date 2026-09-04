@@ -22,11 +22,26 @@ async function withApi(run: (baseUrl: string) => Promise<void>): Promise<void> {
 
 test("a release can be created and listed", async () => {
   await withApi(async (baseUrl) => {
+    const mismatchedRuleSet = await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        projectName: "Northwind Shorts",
+        ruleSetId: "youtube-en-v1",
+        episode: "Rejected Episode",
+        territory: "US",
+        platform: "OTT",
+        language: "en",
+      }),
+    });
+    assert.equal(mismatchedRuleSet.status, 400);
+
     const createdResponse = await fetch(`${baseUrl}/releases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         projectName: "Northwind Shorts",
+        ruleSetId: "youtube-en-v1",
         episode: "Episode 8",
         territory: "US",
         platform: "YOUTUBE",
@@ -36,8 +51,9 @@ test("a release can be created and listed", async () => {
     });
 
     assert.equal(createdResponse.status, 201);
-    const created = (await createdResponse.json()) as ReleaseSummaryDto;
+    const created = (await createdResponse.json()) as ReleaseDetailDto;
     assert.equal(created.state, "DRAFT");
+    assert.equal(created.ruleSetId, "youtube-en-v1");
 
     const listResponse = await fetch(`${baseUrl}/releases`);
     assert.equal(listResponse.status, 200);
@@ -51,7 +67,7 @@ test("an asset is hashed, deduplicated, and visible in release detail", async ()
     const releaseResponse = await fetch(`${baseUrl}/releases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
+      body: JSON.stringify({ projectName: "Northwind Shorts", ruleSetId: "youtube-en-v1", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
     });
     const release = (await releaseResponse.json()) as ReleaseSummaryDto;
     const input = { kind: "SUBTITLE", language: "en", fileName: "episode-8.srt", content: "hello" };
@@ -77,6 +93,7 @@ test("an asset is hashed, deduplicated, and visible in release detail", async ()
     assert.equal(detailResponse.status, 200);
     const detail = (await detailResponse.json()) as ReleaseDetailDto;
     assert.equal(detail.projectId.length > 0, true);
+    assert.equal(detail.ruleSetId, "youtube-en-v1");
     assert.deepEqual(detail.assets.map(({ id }) => id), [first.id]);
   });
 });
@@ -86,7 +103,7 @@ test("read models expose findings, timeline, audit, rules, settings, and dashboa
     const releaseResponse = await fetch(`${baseUrl}/releases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
+      body: JSON.stringify({ projectName: "Northwind Shorts", ruleSetId: "youtube-en-v1", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
     });
     const release = (await releaseResponse.json()) as ReleaseSummaryDto;
     await fetch(`${baseUrl}/releases/${release.id}/assets`, {
@@ -109,7 +126,7 @@ test("read models expose findings, timeline, audit, rules, settings, and dashboa
     assert.deepEqual(dashboard, { totalReleases: 1, draftReleases: 1, blockedReleases: 0, awaitingApproval: 0, completedReleases: 0 });
 
     const rules = (await (await fetch(`${baseUrl}/rulesets`)).json()) as Array<{ status: string; checks: number }>;
-    assert.equal(rules.length, 2);
+    assert.equal(rules.length, 6);
     assert.equal(rules.every(({ status, checks }) => status === "PUBLISHED" && checks > 0), true);
 
     const settings = (await (await fetch(`${baseUrl}/settings`)).json()) as { retentionDays: number; connections: Array<Record<string, unknown>> };
@@ -123,7 +140,7 @@ test("a valid release requires approval before one idempotent delivery submissio
     const releaseResponse = await fetch(`${baseUrl}/releases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
+      body: JSON.stringify({ projectName: "Northwind Shorts", ruleSetId: "youtube-en-v1", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
     });
     const release = (await releaseResponse.json()) as ReleaseSummaryDto;
     for (const asset of [
@@ -185,7 +202,7 @@ test("a repair action is executable and a rejected submission remains blocked", 
     const releaseResponse = await fetch(`${baseUrl}/releases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 9", territory: "JP", platform: "OTT", language: "ja" }),
+      body: JSON.stringify({ projectName: "Northwind Shorts", ruleSetId: "ott-ja-v1", episode: "Episode 9", territory: "JP", platform: "OTT", language: "ja" }),
     });
     const release = (await releaseResponse.json()) as ReleaseSummaryDto;
     for (const asset of [
@@ -231,7 +248,7 @@ test("validation blocks a release with missing required assets", async () => {
     const releaseResponse = await fetch(`${baseUrl}/releases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 10", territory: "BR", platform: "OTT", language: "es" }),
+      body: JSON.stringify({ projectName: "Northwind Shorts", ruleSetId: "ott-es-v1", episode: "Episode 10", territory: "BR", platform: "OTT", language: "es" }),
     });
     const release = (await releaseResponse.json()) as ReleaseSummaryDto;
     const validationResponse = await fetch(`${baseUrl}/releases/${release.id}/validate`, { method: "POST" });

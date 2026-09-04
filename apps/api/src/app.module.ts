@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
 import { HealthController } from "./health.controller.js";
 import { RELEASE_REPOSITORY } from "./domain/repository.js";
-import { InMemoryReleaseRepository } from "./storage/in-memory.repository.js";
+import { createReleaseRepository } from "./storage/repository.factory.js";
 import { ReleasesController } from "./releases.controller.js";
 import { ReleaseService } from "./release.service.js";
 import { ReadModelController } from "./read-model.controller.js";
@@ -17,7 +17,7 @@ import { ReleaseWorkflowService } from "./workflow/release-workflow.service.js";
     ReleaseWorkflowService,
     DeterministicOrchestrationService,
     { provide: ORCHESTRATION_SERVICE, useExisting: DeterministicOrchestrationService },
-    { provide: RELEASE_REPOSITORY, useFactory: () => new InMemoryReleaseRepository() },
+    { provide: RELEASE_REPOSITORY, useFactory: () => createReleaseRepository(process.env.DATABASE_URL) },
   ],
 })
 export class AppModule {}

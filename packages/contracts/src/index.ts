@@ -107,6 +107,7 @@ export interface AuditEventDto {
 
 export interface ReleaseDetailDto extends ReleaseSummaryDto {
   projectId: string;
+  ruleSetId: string;
   deadline?: string | null;
   version: number;
   assets: AssetDto[];
@@ -119,6 +120,7 @@ export interface ReleaseDetailDto extends ReleaseSummaryDto {
 export interface CreateReleaseInput {
   projectId?: string;
   projectName?: string;
+  ruleSetId: string;
   episode: string;
   territory: string;
   platform: Platform;

@@ -48,6 +48,7 @@ export const parseCreateRelease = (value: unknown): CreateReleaseInput => {
   return {
     projectId,
     projectName,
+    ruleSetId: requiredString(body.ruleSetId, "ruleSetId", 100),
     episode: requiredString(body.episode, "episode"),
     territory: requiredString(body.territory, "territory", 32).toUpperCase(),
     platform,

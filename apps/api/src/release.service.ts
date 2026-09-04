@@ -3,12 +3,18 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
 import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseRepository } from "./domain/repository.js";
 import type { ValidatedAssetInput } from "./dto-validation.js";
+import { getRuleSet, RULE_SETS } from "./rulesets.js";
 
 @Injectable()
 export class ReleaseService {
   constructor(@Inject(RELEASE_REPOSITORY) private readonly repository: ReleaseRepository) {}
 
-  async createRelease(input: CreateReleaseInput): Promise<ReleaseSummaryDto> {
+  async createRelease(input: CreateReleaseInput): Promise<ReleaseDetailDto> {
+    const ruleSet = getRuleSet(input.ruleSetId);
+    if (!ruleSet) throw new BadRequestException("ruleSetId must reference a published rule set");
+    if (ruleSet.platform !== input.platform || ruleSet.language !== input.language) {
+      throw new BadRequestException("ruleSetId does not match platform and language");
+    }
     const project = input.projectId
       ? await this.repository.getProject(input.projectId)
       : await this.repository.createProject(input.projectName ?? "Demo Studio");
@@ -19,10 +25,9 @@ export class ReleaseService {
       releaseId: release.id,
       type: "release.created",
       actor: "system",
-      payload: { projectId: project.id, version: release.version },
+      payload: { projectId: project.id, ruleSetId: release.ruleSetId, version: release.version },
     });
-    const { id, episode, territory, platform, language, state, updatedAt } = release;
-    return { id, episode, territory, platform, language, state, updatedAt };
+    return (await this.repository.getRelease(release.id))!;
   }
 
   listReleases(projectId?: string): Promise<ReleaseSummaryDto[]> {
@@ -88,11 +93,7 @@ export class ReleaseService {
   }
 
   getRuleSets() {
-    const updatedAt = "2026-09-04T00:00:00.000Z";
-    return [
-      { id: "youtube-global-v1", name: "YouTube Global Delivery", version: "1.0.0", platform: "YOUTUBE", status: "PUBLISHED", checks: 8, updatedAt },
-      { id: "ott-mvp-v1", name: "OTT Delivery MVP", version: "1.0.0", platform: "OTT", status: "PUBLISHED", checks: 10, updatedAt },
-    ] as const;
+    return RULE_SETS;
   }
 
   getSettings() {

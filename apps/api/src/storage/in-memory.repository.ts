@@ -53,6 +53,7 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     const release: ReleaseRecord = {
       id: randomUUID(),
       projectId: input.projectId,
+      ruleSetId: input.ruleSetId,
       episode: input.episode,
       territory: input.territory,
       platform: input.platform,
