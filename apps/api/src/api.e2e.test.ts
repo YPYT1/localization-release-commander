@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
-import type { ReleaseSummaryDto } from "@lrc/contracts";
+import type { AssetDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
 import { AppModule } from "./app.module.js";
 
 async function withApi(run: (baseUrl: string) => Promise<void>): Promise<void> {
@@ -43,5 +43,40 @@ test("a release can be created and listed", async () => {
     assert.equal(listResponse.status, 200);
     const releases = (await listResponse.json()) as ReleaseSummaryDto[];
     assert.deepEqual(releases.map(({ id }) => id), [created.id]);
+  });
+});
+
+test("an asset is hashed, deduplicated, and visible in release detail", async () => {
+  await withApi(async (baseUrl) => {
+    const releaseResponse = await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "Northwind Shorts", episode: "Episode 8", territory: "US", platform: "YOUTUBE", language: "en" }),
+    });
+    const release = (await releaseResponse.json()) as ReleaseSummaryDto;
+    const input = { kind: "SUBTITLE", language: "en", fileName: "episode-8.srt", content: "hello" };
+
+    const firstResponse = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    assert.equal(firstResponse.status, 201);
+    const first = (await firstResponse.json()) as AssetDto;
+    assert.equal(first.sha256, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+
+    const duplicateResponse = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const duplicate = (await duplicateResponse.json()) as AssetDto;
+    assert.equal(duplicate.id, first.id);
+
+    const detailResponse = await fetch(`${baseUrl}/releases/${release.id}`);
+    assert.equal(detailResponse.status, 200);
+    const detail = (await detailResponse.json()) as ReleaseDetailDto;
+    assert.equal(detail.projectId.length > 0, true);
+    assert.deepEqual(detail.assets.map(({ id }) => id), [first.id]);
   });
 });

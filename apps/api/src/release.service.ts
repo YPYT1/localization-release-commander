@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
-import type { CreateReleaseInput, ReleaseSummaryDto } from "@lrc/contracts";
+import type { AssetDto, CreateReleaseInput, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
 import { RELEASE_REPOSITORY, type ReleaseRepository } from "./domain/repository.js";
+import type { ValidatedAssetInput } from "./dto-validation.js";
 
 @Injectable()
 export class ReleaseService {
@@ -25,5 +27,31 @@ export class ReleaseService {
 
   listReleases(projectId?: string): Promise<ReleaseSummaryDto[]> {
     return this.repository.listReleases(projectId);
+  }
+
+  async getRelease(id: string): Promise<ReleaseDetailDto> {
+    const release = await this.repository.getRelease(id);
+    if (!release) throw new NotFoundException("Release not found");
+    return release;
+  }
+
+  async addAsset(releaseId: string, input: ValidatedAssetInput): Promise<AssetDto> {
+    if (!(await this.repository.getReleaseRecord(releaseId))) throw new NotFoundException("Release not found");
+    const sha256 = input.sha256 ?? createHash("sha256").update(input.content ?? "", "utf8").digest("hex");
+    const existing = await this.repository.findAssetByHash(releaseId, sha256);
+    if (existing) return existing;
+
+    const asset = await this.repository.createAsset(releaseId, {
+      ...input,
+      sha256,
+      uri: input.uri ?? `asset://${sha256}`,
+    });
+    await this.repository.appendAudit({
+      releaseId,
+      type: "asset.created",
+      actor: "system",
+      payload: { assetId: asset.id, kind: asset.kind, fileName: asset.fileName, sha256 },
+    });
+    return asset;
   }
 }

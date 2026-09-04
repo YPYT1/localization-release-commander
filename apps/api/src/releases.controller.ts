@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Post, Query } from "@nestjs/common";
-import type { CreateReleaseInput, ReleaseSummaryDto } from "@lrc/contracts";
-import { DtoValidationPipe, parseCreateRelease } from "./dto-validation.js";
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from "@nestjs/common";
+import type { AssetDto, CreateReleaseInput, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
+import { DtoValidationPipe, parseCreateAsset, parseCreateRelease, type ValidatedAssetInput } from "./dto-validation.js";
 import { ReleaseService } from "./release.service.js";
 
 @Controller("releases")
@@ -15,5 +15,18 @@ export class ReleasesController {
   @Get()
   list(@Query("projectId") projectId?: string): Promise<ReleaseSummaryDto[]> {
     return this.releases.listReleases(projectId);
+  }
+
+  @Get(":id")
+  get(@Param("id", new ParseUUIDPipe({ version: "4" })) id: string): Promise<ReleaseDetailDto> {
+    return this.releases.getRelease(id);
+  }
+
+  @Post(":id/assets")
+  addAsset(
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Body(new DtoValidationPipe(parseCreateAsset)) input: ValidatedAssetInput,
+  ): Promise<AssetDto> {
+    return this.releases.addAsset(id, input);
   }
 }
