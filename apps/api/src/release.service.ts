@@ -1,48 +1,56 @@
 import { createHash } from "node:crypto";
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
 import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseRepository } from "./domain/repository.js";
 import type { ValidatedAssetInput } from "./dto-validation.js";
 import { getRuleSet, RULE_SETS } from "./rulesets.js";
+import type { AuthPrincipal } from "./auth/auth.js";
+import { ProjectAccessService } from "./auth/project-access.service.js";
 
 @Injectable()
 export class ReleaseService {
-  constructor(@Inject(RELEASE_REPOSITORY) private readonly repository: ReleaseRepository) {}
+  constructor(
+    @Inject(RELEASE_REPOSITORY) private readonly repository: ReleaseRepository,
+    private readonly access: ProjectAccessService,
+  ) {}
 
-  async createRelease(input: CreateReleaseInput): Promise<ReleaseDetailDto> {
+  async createRelease(input: CreateReleaseInput, principal: AuthPrincipal): Promise<ReleaseDetailDto> {
     const ruleSet = getRuleSet(input.ruleSetId);
     if (!ruleSet) throw new BadRequestException("ruleSetId must reference a published rule set");
     if (ruleSet.platform !== input.platform || ruleSet.language !== input.language) {
       throw new BadRequestException("ruleSetId does not match platform and language");
     }
-    const project = input.projectId
-      ? await this.repository.getProject(input.projectId)
-      : await this.repository.createProject(input.projectName ?? "Demo Studio");
+    if (input.projectId) this.access.assertProject(principal, input.projectId);
+    if (!input.projectId && !principal.roles.includes("Admin")) {
+      throw new ForbiddenException("Only Admin can create a project; Operator must select an assigned project");
+    }
+    const project = input.projectId ? await this.repository.getProject(input.projectId) : await this.repository.createProject(input.projectName ?? "Demo Studio");
     if (!project) throw new NotFoundException("Project not found");
 
     const release = await this.repository.createRelease({ ...input, projectId: project.id });
     await this.repository.appendAudit({
       releaseId: release.id,
       type: "release.created",
-      actor: "system",
+      actor: principal.id,
       payload: { projectId: project.id, ruleSetId: release.ruleSetId, version: release.version },
     });
     return (await this.repository.getRelease(release.id))!;
   }
 
-  listReleases(projectId?: string): Promise<ReleaseSummaryDto[]> {
-    return this.repository.listReleases(projectId);
+  listReleases(principal: AuthPrincipal, projectId?: string): Promise<ReleaseSummaryDto[]> {
+    if (projectId) {
+      this.access.assertProject(principal, projectId);
+      return this.repository.listReleases([projectId]);
+    }
+    return this.repository.listReleases(this.access.projectFilter(principal));
   }
 
-  async getRelease(id: string): Promise<ReleaseDetailDto> {
-    const release = await this.repository.getRelease(id);
-    if (!release) throw new NotFoundException("Release not found");
-    return release;
+  getRelease(id: string, principal: AuthPrincipal): Promise<ReleaseDetailDto> {
+    return this.access.requireRelease(principal, id);
   }
 
-  async addAsset(releaseId: string, input: ValidatedAssetInput): Promise<AssetDto> {
-    const release = await this.repository.getReleaseRecord(releaseId);
-    if (!release) throw new NotFoundException("Release not found");
+  async addAsset(releaseId: string, input: ValidatedAssetInput, principal: AuthPrincipal): Promise<AssetDto> {
+    const release = await this.access.requireReleaseRecord(principal, releaseId);
     if (!["DRAFT", "BLOCKED", "REMEDIATING", "NEEDS_HUMAN"].includes(release.state)) {
       throw new ConflictException(`Assets cannot be changed while release is ${release.state}`);
     }
@@ -58,31 +66,33 @@ export class ReleaseService {
     await this.repository.appendAudit({
       releaseId,
       type: "asset.created",
-      actor: "system",
+      actor: principal.id,
       payload: { assetId: asset.id, kind: asset.kind, fileName: asset.fileName, sha256 },
     });
     return asset;
   }
 
-  async listFindings(releaseId: string): Promise<FindingDto[]> {
-    await this.requireRelease(releaseId);
+  async listFindings(releaseId: string, principal: AuthPrincipal): Promise<FindingDto[]> {
+    await this.access.requireReleaseRecord(principal, releaseId);
     return this.repository.listFindings(releaseId);
   }
 
-  async getTimeline(releaseId: string, after?: string): Promise<Array<AuditEventDto & { summary: string }>> {
-    await this.requireRelease(releaseId);
+  async getTimeline(releaseId: string, principal: AuthPrincipal, after?: string): Promise<Array<AuditEventDto & { summary: string }>> {
+    await this.access.requireReleaseRecord(principal, releaseId);
     return (await this.repository.listAudit({ releaseId, after, limit: 200 })).map((event) => ({
       ...event,
       summary: this.auditSummary(event),
     }));
   }
 
-  listAudit(query: Record<string, string | undefined>): Promise<AuditEventDto[]> {
-    return this.repository.listAudit(this.parseAuditFilter(query));
+  async listAudit(query: Record<string, string | undefined>, principal: AuthPrincipal): Promise<AuditEventDto[]> {
+    const filter = this.parseAuditFilter(query);
+    if (filter.releaseId) await this.access.requireReleaseRecord(principal, filter.releaseId);
+    return this.repository.listAudit({ ...filter, projectIds: this.access.projectFilter(principal) });
   }
 
-  async getDashboard(): Promise<Record<string, number>> {
-    const releases = await this.repository.listReleases();
+  async getDashboard(principal: AuthPrincipal): Promise<Record<string, number>> {
+    const releases = await this.repository.listReleases(this.access.projectFilter(principal));
     return {
       totalReleases: releases.length,
       draftReleases: releases.filter(({ state }) => state === "DRAFT").length,
@@ -108,10 +118,6 @@ export class ReleaseService {
         { id: "ott", provider: "OTT Sandbox", status: "SANDBOX", identifier: "sandbox" },
       ],
     };
-  }
-
-  private async requireRelease(id: string): Promise<void> {
-    if (!(await this.repository.getReleaseRecord(id))) throw new NotFoundException("Release not found");
   }
 
   private parseAuditFilter(query: Record<string, string | undefined>): AuditFilter {

@@ -174,9 +174,10 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     return this.release(result.rows[0]!);
   }
 
-  async listReleases(projectId?: string): Promise<ReleaseSummaryDto[]> {
-    const result = projectId
-      ? await this.pool.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases WHERE project_id = $1 ORDER BY updated_at DESC, id`, [projectId])
+  async listReleases(projectIds?: readonly string[]): Promise<ReleaseSummaryDto[]> {
+    if (projectIds?.length === 0) return [];
+    const result = projectIds
+      ? await this.pool.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases WHERE project_id = ANY($1::uuid[]) ORDER BY updated_at DESC, id`, [projectIds])
       : await this.pool.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases ORDER BY updated_at DESC, id`);
     return result.rows.map((row) => this.releaseSummary(row));
   }
@@ -346,6 +347,7 @@ export class PostgresReleaseRepository implements ReleaseRepository {
   }
 
   async listAudit(filter: AuditFilter = {}): Promise<AuditEventDto[]> {
+    if (filter.projectIds?.length === 0) return [];
     const values: unknown[] = [];
     const clauses: string[] = [];
     const add = (column: string, value: unknown) => {
@@ -353,6 +355,10 @@ export class PostgresReleaseRepository implements ReleaseRepository {
       clauses.push(`${column} = $${values.length}`);
     };
     if (filter.releaseId) add("release_id", filter.releaseId);
+    if (filter.projectIds) {
+      values.push(filter.projectIds);
+      clauses.push(`release_id IN (SELECT id FROM releases WHERE project_id = ANY($${values.length}::uuid[]))`);
+    }
     if (filter.actor) add("actor", filter.actor);
     if (filter.type) add("type", filter.type);
     if (filter.after) {

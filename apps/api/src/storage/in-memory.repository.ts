@@ -68,9 +68,9 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     return copy(release);
   }
 
-  async listReleases(projectId?: string): Promise<ReleaseSummaryDto[]> {
+  async listReleases(projectIds?: readonly string[]): Promise<ReleaseSummaryDto[]> {
     return [...this.releases.values()]
-      .filter((release) => !projectId || release.projectId === projectId)
+      .filter((release) => projectIds === undefined || projectIds.includes(release.projectId))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map(({ id, episode, territory, platform, language, state, updatedAt }) => copy({ id, episode, territory, platform, language, state, updatedAt }));
   }
@@ -222,6 +222,7 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     const limit = filter.limit ?? 100;
     return [...this.audit.values()]
       .filter((event) => !filter.releaseId || event.releaseId === filter.releaseId)
+      .filter((event) => filter.projectIds === undefined || filter.projectIds.includes(this.releases.get(event.releaseId)?.projectId ?? ""))
       .filter((event) => !filter.actor || event.actor === filter.actor)
       .filter((event) => !filter.type || event.type === filter.type)
       .filter((event) => !filter.after || event.occurredAt > filter.after)

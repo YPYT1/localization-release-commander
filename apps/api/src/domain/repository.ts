@@ -59,6 +59,7 @@ export interface NewDelivery {
 
 export interface AuditFilter {
   releaseId?: string;
+  projectIds?: readonly string[];
   actor?: string;
   type?: string;
   after?: string;
@@ -69,7 +70,7 @@ export interface ReleaseRepository {
   createProject(name: string): Promise<ProjectDto>;
   getProject(id: string): Promise<ProjectDto | undefined>;
   createRelease(input: CreateReleaseInput & { projectId: string }): Promise<ReleaseRecord>;
-  listReleases(projectId?: string): Promise<ReleaseSummaryDto[]>;
+  listReleases(projectIds?: readonly string[]): Promise<ReleaseSummaryDto[]>;
   getReleaseRecord(id: string): Promise<ReleaseRecord | undefined>;
   getRelease(id: string): Promise<ReleaseDetailDto | undefined>;
   updateReleaseState(id: string, state: ReleaseState): Promise<ReleaseRecord | undefined>;

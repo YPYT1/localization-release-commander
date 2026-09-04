@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { BadRequestException, ConflictException, HttpException, Inject, Injectable, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
+import { ConflictException, HttpException, Inject, Injectable, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import type { ActionDto, ApprovalDecision, ApprovalDto, DeliveryAttemptDto, ReleaseDetailDto, ReleaseState, WorkflowResultDto } from "@lrc/contracts";
 import { RELEASE_REPOSITORY, type NewAction, type ReleaseRepository } from "../domain/repository.js";
 import { ORCHESTRATION_SERVICE, type OrchestrationRunResult, type OrchestrationService } from "./orchestration.js";
+import type { AuthPrincipal } from "../auth/auth.js";
+import { ProjectAccessService } from "../auth/project-access.service.js";
 
 const RUNNABLE_STATES: ReleaseState[] = ["DRAFT", "BLOCKED", "REMEDIATING", "NEEDS_HUMAN", "READY_FOR_APPROVAL", "QC_FAILED"];
 
@@ -11,11 +13,12 @@ export class ReleaseWorkflowService {
   constructor(
     @Inject(RELEASE_REPOSITORY) private readonly repository: ReleaseRepository,
     @Inject(ORCHESTRATION_SERVICE) private readonly orchestration: OrchestrationService,
+    private readonly access: ProjectAccessService,
   ) {}
 
-  async validateRelease(releaseId: string, actor = "demo-operator"): Promise<WorkflowResultDto> {
-    actor = this.actor(actor);
-    const release = await this.requireRunnableRelease(releaseId);
+  async validateRelease(releaseId: string, principal: AuthPrincipal): Promise<WorkflowResultDto> {
+    const actor = principal.id;
+    const release = await this.requireRunnableRelease(releaseId, principal);
     const run = await this.repository.createWorkflowRun(releaseId, "api-deterministic-v1");
     await this.repository.updateReleaseState(releaseId, "VALIDATING");
     await this.audit(releaseId, "workflow.started", actor, { runId: run.id, mode: "validate" });
@@ -31,9 +34,9 @@ export class ReleaseWorkflowService {
     }
   }
 
-  async runRelease(releaseId: string, actor = "demo-operator"): Promise<WorkflowResultDto> {
-    actor = this.actor(actor);
-    const release = await this.requireRunnableRelease(releaseId);
+  async runRelease(releaseId: string, principal: AuthPrincipal): Promise<WorkflowResultDto> {
+    const actor = principal.id;
+    const release = await this.requireRunnableRelease(releaseId, principal);
     const run = await this.repository.createWorkflowRun(releaseId, "api-deterministic-v1");
     await this.repository.updateReleaseState(releaseId, "VALIDATING");
     await this.audit(releaseId, "workflow.started", actor, { runId: run.id, mode: "run" });
@@ -53,7 +56,8 @@ export class ReleaseWorkflowService {
         return { releaseId, runId: run.id, state: "REMEDIATING", findings, action };
       }
 
-      const action = await this.ensureSubmissionAction(release, actor);
+      const risk = findings.some(({ code }) => code === "RIGHTS_EXPIRING") ? "R3" : "R2";
+      const action = await this.ensureSubmissionAction(release, actor, risk);
       await this.repository.updateReleaseState(releaseId, "READY_FOR_APPROVAL");
       await this.repository.updateWorkflowRun(run.id, "WAITING", { state: "READY_FOR_APPROVAL", actionId: action.id });
       return { releaseId, runId: run.id, state: "READY_FOR_APPROVAL", findings, action };
@@ -62,13 +66,12 @@ export class ReleaseWorkflowService {
     }
   }
 
-  async executeAction(actionId: string, actor = "demo-operator"): Promise<ActionDto> {
-    actor = this.actor(actor);
-    const action = await this.requireAction(actionId);
+  async executeAction(actionId: string, principal: AuthPrincipal): Promise<ActionDto> {
+    const actor = principal.id;
+    const { action, release } = await this.access.requireAction(principal, actionId);
     if (action.status === "COMPLETED") return action;
     if (action.status === "REJECTED" || action.status === "FAILED") throw new ConflictException(`Action is ${action.status}`);
     if (action.risk === "R2" || action.risk === "R3") throw new ConflictException("High-risk actions must use the approval and delivery endpoints");
-    const release = await this.requireRelease(action.releaseId);
     await this.repository.updateAction(action.id, "RUNNING");
     await this.audit(action.releaseId, "action.started", actor, { actionId: action.id, type: action.type });
     try {
@@ -83,21 +86,21 @@ export class ReleaseWorkflowService {
       if (!completed) throw new NotFoundException("Action not found");
       await this.checkpointAction(action.releaseId, action.id, "COMPLETED", { state: "REMEDIATION_COMPLETED", assetId });
       await this.audit(action.releaseId, "action.completed", actor, { actionId: action.id, type: action.type, assetId });
-      await this.runRelease(action.releaseId, actor);
+      await this.runRelease(action.releaseId, principal);
       return completed;
     } catch (error) {
       await this.repository.updateAction(action.id, "FAILED", { error: this.errorMessage(error) });
       await this.repository.updateReleaseState(action.releaseId, "BLOCKED");
       await this.audit(action.releaseId, "action.failed", actor, { actionId: action.id, error: this.errorMessage(error) });
-      throw error instanceof BadRequestException || error instanceof ConflictException || error instanceof NotFoundException
+      throw error instanceof ConflictException || error instanceof NotFoundException
         ? error
         : new ServiceUnavailableException(this.errorMessage(error));
     }
   }
 
-  async decideAction(actionId: string, decision: ApprovalDecision, reason: string, actor = "demo-operator"): Promise<ApprovalDto> {
-    actor = this.actor(actor);
-    const action = await this.requireAction(actionId);
+  async decideAction(actionId: string, decision: ApprovalDecision, reason: string, principal: AuthPrincipal): Promise<ApprovalDto> {
+    const actor = principal.id;
+    const { action } = await this.access.requireAction(principal, actionId);
     if (action.risk === "R0" || action.risk === "R1") throw new ConflictException("This action does not require approval");
     const prior = (await this.repository.listApprovals(action.id)).find((approval) => approval.actorId === actor);
     if (prior) {
@@ -125,12 +128,10 @@ export class ReleaseWorkflowService {
     return approval;
   }
 
-  async submitDelivery(deliveryId: string, actor = "demo-operator"): Promise<DeliveryAttemptDto> {
-    actor = this.actor(actor);
-    const delivery = await this.repository.getDelivery(deliveryId);
-    if (!delivery) throw new NotFoundException("Delivery not found");
+  async submitDelivery(deliveryId: string, principal: AuthPrincipal): Promise<DeliveryAttemptDto> {
+    const actor = principal.id;
+    const { delivery, release } = await this.access.requireDelivery(principal, deliveryId);
     if (delivery.status === "SUBMITTED" || delivery.status === "QC_PASSED") return delivery;
-    const release = await this.requireRelease(delivery.releaseId);
     const approved = release.actions.find(
       (action) => action.type === "SUBMIT_DELIVERY" && action.status === "APPROVED" && action.input.deliveryId === delivery.id,
     );
@@ -185,7 +186,7 @@ export class ReleaseWorkflowService {
     return action;
   }
 
-  private async ensureSubmissionAction(release: ReleaseDetailDto, actor: string): Promise<ActionDto> {
+  private async ensureSubmissionAction(release: ReleaseDetailDto, actor: string, risk: "R2" | "R3"): Promise<ActionDto> {
     const idempotencyKey = this.idempotencyKey(release, "SUBMIT_DELIVERY");
     const existing = await this.repository.findActionByIdempotencyKey(idempotencyKey);
     if (existing) {
@@ -196,7 +197,7 @@ export class ReleaseWorkflowService {
     const action = await this.repository.createAction({
       releaseId: release.id,
       type: "SUBMIT_DELIVERY",
-      risk: "R2",
+      risk,
       status: "PENDING_APPROVAL",
       input: { deliveryId: delivery.id, provider: release.platform, territory: release.territory, manifestVersion: this.manifestVersion(release) },
       idempotencyKey,
@@ -213,26 +214,14 @@ export class ReleaseWorkflowService {
     return createHash("sha256").update(release.assets.map(({ id, sha256 }) => `${id}:${sha256}`).sort().join("|")).digest("hex").slice(0, 16);
   }
 
-  private async requireRunnableRelease(id: string): Promise<ReleaseDetailDto> {
-    const release = await this.requireRelease(id);
+  private async requireRunnableRelease(id: string, principal: AuthPrincipal): Promise<ReleaseDetailDto> {
+    const release = await this.access.requireRelease(principal, id);
     if (!RUNNABLE_STATES.includes(release.state)) throw new ConflictException(`Release cannot run from ${release.state}`);
     return release;
   }
 
-  private async requireRelease(id: string): Promise<ReleaseDetailDto> {
-    const release = await this.repository.getRelease(id);
-    if (!release) throw new NotFoundException("Release not found");
-    return release;
-  }
-
-  private async requireAction(id: string): Promise<ActionDto> {
-    const action = await this.repository.getAction(id);
-    if (!action) throw new NotFoundException("Action not found");
-    return action;
-  }
-
   private async audit(releaseId: string, type: string, actor: string, payload: Record<string, unknown>): Promise<void> {
-    await this.repository.appendAudit({ releaseId, type, actor: this.actor(actor), payload });
+    await this.repository.appendAudit({ releaseId, type, actor, payload });
   }
 
   private async checkpointAction(
@@ -244,12 +233,6 @@ export class ReleaseWorkflowService {
     const runs = await this.repository.listWorkflowRuns(releaseId);
     const run = [...runs].reverse().find((candidate) => candidate.status === "WAITING" && candidate.checkpoint.actionId === actionId);
     if (run) await this.repository.updateWorkflowRun(run.id, status, { ...run.checkpoint, ...checkpoint });
-  }
-
-  private actor(actor: string): string {
-    const value = actor.trim();
-    if (!value || value.length > 120) throw new BadRequestException("x-actor-id must be between 1 and 120 characters");
-    return value;
   }
 
   private async failRun(releaseId: string, runId: string, previousState: ReleaseState, error: unknown, actor: string): Promise<never> {

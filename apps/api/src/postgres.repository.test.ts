@@ -26,6 +26,15 @@ test("the PostgreSQL repository persists a complete release aggregate", { skip: 
       platform: "YOUTUBE",
       language: "en",
     });
+    const foreignProject = await repository.createProject("Foreign Studio");
+    const foreignRelease = await repository.createRelease({
+      projectId: foreignProject.id,
+      ruleSetId: "youtube-en-v1",
+      episode: "Foreign Episode",
+      territory: "US",
+      platform: "YOUTUBE",
+      language: "en",
+    });
     const asset = await repository.createAsset(release.id, {
       kind: "VIDEO",
       fileName: "episode.mp4",
@@ -51,6 +60,7 @@ test("the PostgreSQL repository persists a complete release aggregate", { skip: 
     assert.equal(firstClaim?.claimed, true);
     assert.equal(secondClaim?.claimed, false);
     await repository.appendAudit({ releaseId: release.id, type: "release.created", actor: "test", payload: { version: 1 } });
+    await repository.appendAudit({ releaseId: foreignRelease.id, type: "release.created", actor: "foreign", payload: { version: 1 } });
     const run = await repository.createWorkflowRun(release.id, "test-graph-v1");
     await repository.updateWorkflowRun(run.id, "WAITING", { actionId: action.id });
 
@@ -61,6 +71,8 @@ test("the PostgreSQL repository persists a complete release aggregate", { skip: 
     assert.equal(reloaded?.approvals[0]?.decision, "APPROVED");
     assert.equal(reloaded?.deliveries[0]?.status, "SUBMITTING");
     assert.equal((await repository.listAudit({ releaseId: release.id }))[0]?.actor, "test");
+    assert.deepEqual((await repository.listReleases([project.id])).map(({ id }) => id), [release.id]);
+    assert.deepEqual((await repository.listAudit({ projectIds: [project.id] })).map(({ releaseId }) => releaseId), [release.id]);
     assert.deepEqual((await repository.listWorkflowRuns(release.id))[0]?.checkpoint, { actionId: action.id });
   } finally {
     if (repository instanceof PostgresReleaseRepository) await repository.onApplicationShutdown();
