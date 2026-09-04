@@ -1,208 +1,249 @@
 # Localization Release Commander
 
-内容出海交付 Agent：把“成片”变成“可发布、可审计、可回滚”的多平台交付包。
+面向内容出海团队的交付控制台：把正片、字幕、音频、版权与平台规则收束成一条可检查、可审批、可恢复、可审计的 Release 流程。
 
-## 文档先行入口
+> 截至 2026-09-04，本仓库已经具备完整产品界面、领域 API、持久化、确定性 QC、审批与沙箱交付等生产形状；它仍是持续实现中的工程项目，不代表已经完成生产上线验收。未完成项见[当前边界](#当前边界)。
 
-1. [产品定义](docs/01-product.md)
-2. [范围与验收](docs/02-scope-acceptance.md)
-3. [领域模型与状态机](docs/03-domain-state.md)
-4. [系统架构](docs/04-architecture.md)
-5. [Agent 编排决策](docs/05-agent-orchestration.md)
-6. [工具与 API 契约](docs/06-tool-contracts.md)
-7. [数据与存储](docs/07-data-model.md)
-8. [评测与验收计划](docs/08-evaluation.md)
-9. [安全、权限与审计](docs/09-security-audit.md)
-10. [实施路线图](docs/10-roadmap.md)
-11. [前端体验与页面规格](docs/11-frontend-experience.md)
-12. [功能模块与交互规格](docs/12-functional-modules.md)
-13. [前端构建契约](docs/13-frontend-build-contract.md)
-14. [ADR 索引](docs/adr/README.md)
+## 解决什么问题
 
-## 技术基线
+典型场景是一集内容需要同时交付到不同地区和平台：运营要确认视频轨道、字幕阅读速度、时间轴、版权窗口和平台格式，还要让高风险动作经过正确的人审批，并在失败后知道从哪里恢复。
 
-| 层 | 选择 |
+Localization Release Commander 将这些步骤绑定到同一条 Release 时间线：
+
+1. 以“集 × 地区 × 平台 × 语言”创建 Release，并锁定 RuleSet。
+2. 上传或登记正片、字幕、音频、海报、元数据和版权文件。
+3. 用确定性代码生成 Finding；可逆修复产生新资产，不覆盖原件。
+4. R2/R3 动作进入人工审批，R3 要求两个不同主体批准。
+5. 以幂等键提交平台并保存 provider request id、回执和审计事件。
+6. 平台 QC 失败后回到修复与重新审批，而不是盲目重试。
+
+模型或 Agent 可以解释规则和推进流程，但时间码、哈希、权限、版权日期、状态门禁和外部副作用均由确定性代码控制。
+
+## 当前已实现
+
+| 区域 | 已落地能力 |
 |---|---|
-| 前端 | Next.js App Router + TypeScript + pnpm |
-| 后端 | NestJS + TypeScript + pnpm |
-| Agent 工作流 | LangGraph.js；LangChain.js 仅用于模型/工具适配 |
-| 媒体检查 | FFmpeg/ffprobe |
-| 数据库 | PostgreSQL |
-| 对象存储 | S3 兼容存储 |
-| 异步任务 | Redis + BullMQ |
-| 观测 | OpenTelemetry + 结构化审计日志 |
+| 产品官网 | `/`、`/workflow`、`/quality`、`/security`、`/demo`，包含产品场景、流程、质量与安全说明 |
+| 工作台 | 登录、总览、Release 列表/创建/详情、Finding、审批与交付、RuleSet、审计、设置；服务端读取真实 API 数据并按角色显示操作入口 |
+| Web 会话 | Next.js Server Action 登录；JWT 只保存在 `HttpOnly`、`SameSite=Lax` Cookie，生产环境开启 `Secure` |
+| NestJS API | Release、资产、Finding、时间线、Action、审批、Delivery、审计、RuleSet、设置和健康检查接口 |
+| 认证授权 | HS256 JWT 签名与 `iss`、`aud`、`exp`、`nbf` 校验；Operator、Approver、ReleaseManager、Admin RBAC；所有资源按 `projectIds` 隔离 |
+| 资产 | 工作台单文件上传、同源流式 BFF、NestJS multipart 接收、服务端 SHA-256、随机对象名、同卷原子落盘、大小限制、去重、授权下载和失败清理 |
+| 媒体检查 | `ffprobe` 参数数组调用、超时与输出限制；校验 VIDEO/AUDIO 所需轨道并归一化格式、时长、码率和流信息 |
+| 确定性 QC | SRT BOM/CRLF 解析与序列化、CPS、重叠、空字幕、媒体末尾、可逆时间修复与 diff、SRT→TTML、版权窗口检查 |
+| 审批与交付 | R2 单人、R3 双主体审批；审批与动作/输入版本绑定；Delivery 原子 claim、幂等提交、失败恢复和审计 |
+| PostgreSQL | Project、Release、Asset、Finding、Action、Approval、Delivery、Audit、Workflow Run 持久化；迁移、约束、索引和不可更新/删除的审计触发器 |
+| LangGraph Worker | A1–A7 流程：校验、自动修复、人工修复、版权门禁、TTML 打包、审批、超时恢复、平台 QC 回流；提供确定性平台模拟器 |
+| 工程验证 | Node 原生测试、workspace typecheck/build/lint，以及 GitHub Actions 上的 install → lint → typecheck → test → build |
 
-## 当前边界
+工作台使用原生文件选择器把 multipart 请求流式转发到 API；Bearer token 仅由服务端从 HttpOnly Cookie 读取，浏览器脚本不会接触 token。上传入口包含同源校验、500 MiB 预检、取消和会话失效处理。
 
-第一版只做：中文短剧到英语、日语、西班牙语；YouTube 与一个 OTT 适配器；SRT/TTML；正片、配音、海报、元数据；交付前 QC、人工审批、发布结果回收。
+## 架构与目录
 
-明确不做：自动生成配音、自动购买版权、无审批的生产覆盖、全平台同时接入。
-
-## 初始化状态
-
-这个仓库已经具备可运行的 monorepo 骨架：
-
-- `apps/web`：Next.js 官网和交付工作台入口（`/`、`/app`）
-- `apps/api`：NestJS API（当前提供 `GET /health`）
-- `apps/worker`：LangGraph.js Release 路由工作流
-- `packages/contracts`：前后端共用的 DTO 与 Release 状态
-
-当前 UI 是产品信息架构的首个可运行表面，而不是对生产功能完成度的宣称。数据库、对象存储、队列、FFmpeg 与平台 Adapter 已完成文档设计，下一阶段按文档接入。
-
-## 技术选择
-
-| 层 | 技术 | 职责 |
-|---|---|---|
-| Monorepo | pnpm workspace + TypeScript | 统一依赖、脚本和共享类型 |
-| Web | Next.js App Router + React | 官网、工作台和受保护页面 |
-| API | NestJS | 鉴权、领域 API、审计与任务入口 |
-| 工作流 | LangGraph.js | 分支、暂停、恢复、重试和 checkpoint |
-| 模型适配 | LangChain.js / `@langchain/core` | 结构化模型与工具节点适配 |
-| 媒体 QC（后续） | FFmpeg / ffprobe | 编码、时长、轨道与媒体事实 |
-| 持久化（后续） | PostgreSQL + S3 | 领域事实与不可变资产版本 |
-| 任务（后续） | Redis + BullMQ | 异步运行与重试 |
-
-LangGraph 只负责流程编排；PostgreSQL 才是业务事实来源。模型永远不直接决定版权有效性、权限、状态迁移或平台发布。
-
-## 架构
+这是一个 pnpm monorepo，但不是单体部署。Web、API、Worker 是三个独立运行单元，共享契约和 QC 包。
 
 ```mermaid
 flowchart LR
-  web[Next.js 控制台] --> api[NestJS API]
+  browser[Browser] --> web[Next.js Web]
+  web --> api[NestJS API]
   api --> db[(PostgreSQL)]
-  api --> queue[Redis / BullMQ]
-  queue --> worker[Workflow Worker]
-  worker --> graph[LangGraph.js]
-  graph --> qc[FFmpeg / 确定性 QC]
-  graph --> model[LangChain.js 模型适配]
-  graph --> platform[平台适配器]
-  worker --> audit[Audit / OpenTelemetry]
+  api --> assets[(Mounted asset directory)]
+  api -. pending queue integration .-> worker[LangGraph Worker]
+  worker --> qc[packages/qc]
+  worker --> provider[Deterministic provider adapter]
 ```
-
-## 目录
 
 ```text
 apps/
-  api/        NestJS API（当前：health endpoint）
-  web/        Next.js 官网与工作台入口
-  worker/     LangGraph Release 路由工作流与测试
+  web/        Next.js 产品官网、登录与操作工作台
+  api/        NestJS REST、JWT/RBAC、资产、持久化、审批与审计
+  worker/     LangGraph 工作流和平台 Adapter
 packages/
-  contracts/  共享 DTO、Finding 与 Release 状态
-docs/         产品、架构、状态机、ADR、验收和前端规格
+  contracts/  Web/API/Worker 共享 DTO 与状态类型
+  qc/         无模型依赖的字幕、TTML、版权确定性逻辑
+docs/         产品、领域、架构、契约、安全、评测和前端规格
+examples/     第 8 集固定样例
 ```
 
-## 快速开始
+当前 Worker 直接依赖 `@langchain/langgraph`。仓库没有为“将来可能用到”引入完整 LangChain/LLM 栈；需要模型节点时再通过受限 Adapter 接入。
 
-前置条件：Node.js 24+ 与 pnpm 11+。
+## 本地启动
 
-```bash
+### 前置条件
+
+- Node.js 24+
+- pnpm 11.1.2（根 `package.json` 已固定版本）
+- VIDEO/AUDIO 上传需要 `ffprobe` 可执行文件
+- PostgreSQL 为可选项；未设置 `DATABASE_URL` 时 API 使用进程内演示存储
+
+### 最小演示模式
+
+根目录的 `.env.example` 是变量清单；当前 NestJS 进程不会自动加载根 `.env`，请在启动进程的 shell 中设置变量。
+
+```powershell
 git clone https://github.com/YPYT1/localization-release-commander.git
-cd localization-release-commander
-pnpm install
+Set-Location localization-release-commander
+pnpm install --frozen-lockfile
+
+$env:AUTH_JWT_SECRET = "replace-with-at-least-32-random-bytes"
+$env:DEMO_AUTH_ENABLED = "true"
+$env:API_URL = "http://localhost:3001"
 pnpm dev
 ```
-
-本地地址：
 
 | 服务 | 地址 |
 |---|---|
 | 产品官网 | `http://localhost:3000` |
-| 交付工作台 | `http://localhost:3000/app` |
+| 演示登录 | `http://localhost:3000/login` |
+| 工作台 | `http://localhost:3000/app` |
 | API 健康检查 | `http://localhost:3001/health` |
+| Worker | 无公开端口；开发进程加载并验证工作流 |
 
-环境变量从 `.env.example` 复制；当前骨架不需要实际的数据库、Redis 或 LLM 凭证即可构建、测试和浏览 UI。
+`DEMO_AUTH_ENABLED=true` 只应用于本地演示；当 `NODE_ENV=production` 时演示登录固定隐藏。
 
-## 常用命令
+### PostgreSQL 模式
 
-```bash
-pnpm dev        # 并行启动 web、api、worker
-pnpm typecheck  # 全 workspace TypeScript 检查
-pnpm test       # Worker 流程测试
-pnpm build      # 全 workspace 生产构建
-pnpm lint       # 当前使用 TypeScript 作为最小静态检查
+仓库的 `compose.yaml` 只启动 PostgreSQL 17，不包含 Web/API/Worker 镜像。
+
+```powershell
+docker compose up -d postgres
+$env:DATABASE_URL = "postgresql://lrc:lrc@localhost:5432/lrc"
+pnpm --filter @lrc/api db:migrate
+pnpm dev
 ```
 
-单独验证 Worker：
+设置 `DATABASE_URL` 后，API 启动也会运行幂等迁移；显式执行 `db:migrate` 便于部署阶段单独失败和审计。
 
-```bash
+## 环境变量
+
+| 变量 | 默认值 | 当前用途 |
+|---|---|---|
+| `AUTH_JWT_SECRET` | 无 | API 必填；UTF-8 长度至少 32 bytes |
+| `DEMO_AUTH_ENABLED` | `false` | 非生产环境开启固定 persona 演示登录 |
+| `DATABASE_URL` | 无 | 设置后使用 PostgreSQL；未设置时使用内存 Repository |
+| `POSTGRES_TEST_URL` | 无 | 开启真实 PostgreSQL Repository 集成测试 |
+| `API_URL` | `http://localhost:4000` | Next.js 服务端调用 API；本地应设为 `http://localhost:3001` |
+| `NEXT_PUBLIC_API_URL` | Web 后备 `http://localhost:4000`；API CORS 后备 `http://localhost:3000` | 当前同时被 Web API 后备和 API CORS 配置复用，生产前需要拆分为明确的前端 origin |
+| `PORT` | `3001` | NestJS 监听端口 |
+| `ASSET_STORAGE_DIR` | 开发环境为 `data/assets` | 受控资产根目录；生产环境必须是绝对路径并挂载持久卷 |
+| `ASSET_MAX_BYTES` | `524288000` | 单文件上限，默认 500 MiB |
+| `FFPROBE_PATH` | `ffprobe` | `ffprobe` 可执行文件路径 |
+| `FFPROBE_TIMEOUT_MS` | `15000` | 单次媒体检查超时 |
+| `WORKSPACE_NAME` | `Localization Release Commander` | 设置页工作区名称 |
+| `AUDIT_RETENTION_DAYS` | `730` | 设置页展示的审计保留策略 |
+| `YOUTUBE_CONNECTION_ID` | 无 | 设置页只显示脱敏连接标识；当前不提供真实凭证写接口 |
+| `REDIS_URL` | 无 | 已保留但尚未接入运行时 |
+| `OPENAI_API_KEY` | 无 | 已保留但当前实现不读取，也不需要 LLM 才能运行 |
+
+## 数据库迁移与验证
+
+```powershell
+# 显式执行 PostgreSQL migration
+pnpm --filter @lrc/api db:migrate
+
+# 与 CI 一致的整仓验证
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+按单元验证：
+
+```powershell
+pnpm --filter @lrc/qc test
+pnpm --filter @lrc/api test
 pnpm --filter @lrc/worker test
-pnpm --filter @lrc/worker dev
+pnpm --filter @lrc/web typecheck
+pnpm --filter @lrc/web build
 ```
 
-## 当前工作流
+未设置 `POSTGRES_TEST_URL` 时，API 的 PostgreSQL 集成用例会跳过；这不等于数据库路径已验证。要运行真实数据库用例：
 
-`apps/worker/src/index.ts` 中的 `runReleaseWorkflow` 让“是否存在 QC Finding”成为第一个可测的工作流分支：
-
-```ts
-await runReleaseWorkflow({ releaseId: "ep08-us" });
-// nextState === "READY_FOR_APPROVAL"
-
-await runReleaseWorkflow({
-  releaseId: "ep08-br",
-  findings: ["SUBTITLE_OVERLAP"],
-});
-// nextState === "BLOCKED"
+```powershell
+$env:POSTGRES_TEST_URL = "postgresql://lrc:lrc@localhost:5432/lrc"
+pnpm --filter @lrc/api test
 ```
 
-后续节点会按文档扩展为：资产检查 → Finding → 可逆修复 → 人工审批 → 平台提交 → 平台 QC 回执。所有外部副作用均使用幂等键和 provider request id 保护。
+## 演示一条 Release
 
-## Release 状态
+1. 启动 Web/API/Worker，打开 `/login`，选择 Admin 创建首个 Project/Release；其他角色需要绑定已有 Project UUID。
+2. 在新 Release 中选择 YouTube/OTT 与已发布的英语、日语或西班牙语 RuleSet。
+3. 在 Release 详情使用“上传资产”选择真实文件、类型、语言和可选 metadata；Web 将请求流式转发到 `POST /releases/:id/assets/upload`。
+4. 调用“运行交付检查”，查看 Finding、审计时间线和建议的可逆动作。
+5. 以 Operator 执行字幕修复；系统读取原资产并生成带 `parentAssetId` 的新版本。
+6. 以 Approver 审批提交动作；R3 场景切换到第二个 Approver 完成双人批准。
+7. 以 ReleaseManager 提交 Delivery；当前沙箱 Adapter 返回稳定 request id，不会访问外部平台。
+8. 在审批页和审计页核对 Action、Approval、Delivery、主体与回执。
 
-```text
-DRAFT → VALIDATING → BLOCKED / READY_FOR_APPROVAL
-BLOCKED → REMEDIATING / NEEDS_HUMAN
-READY_FOR_APPROVAL → APPROVED → SUBMITTING → SUBMITTED
-SUBMITTED → QC_PASSED / QC_FAILED → COMPLETED 或 REMEDIATING
-```
+只启动 Web、无需连接 API/Worker，即可在 `/demo` 回放固定样例；该页面不产生真实外部副作用。
 
-详细状态图与幂等规则见 [领域模型与状态机](docs/03-domain-state.md)。
+## 部署边界
 
-## 质量门槛
+- `apps/web`、`apps/api`、`apps/worker` 应分别构建、发布和扩容；单仓库只负责原子演进共享契约。
+- 浏览器不直连数据库或 Worker，Web 通过 API 读取和变更业务事实。
+- PostgreSQL 是领域事实源；Redis 只能承担队列，不应保存最终业务状态。
+- 资产当前保存到受控挂载目录。生产部署必须提供持久卷、备份、容量监控和同卷临时目录；当前没有 S3 Adapter。
+- Worker 不暴露公网端口；平台凭证应只出现在服务端 Adapter，并与 Web/模型上下文隔离。
+- `compose.yaml` 是本地数据库辅助，不是完整生产编排；仓库当前没有应用 Dockerfile、镜像发布或 Kubernetes/Render 清单。
 
-MVP 的评测集为 100 个脱敏交付包；重点指标为问题召回率 ≥95%、自动修复回归成功率 ≥98%、重复外部动作为 0、审计完整率 100%、首次平台 QC 通过率 ≥90%。完整评测计划见 [评测与验收计划](docs/08-evaluation.md)。
+## 安全原则
 
-## 安全与审批
+- API 不信任客户端传入的 actor、角色、项目范围、资产 URI 或 SHA-256；这些值由 JWT、Repository 和服务端存储计算得出。
+- JWT 校验签名、签发方、受众、时间边界、角色白名单和 Project UUID；每次资源访问再次执行项目隔离。
+- 原始资产保持不可变；修复生成新对象和父子关系。存储 URI 使用固定 `asset://` 语法并阻止目录穿越和符号链接替换。
+- 高风险动作必须审批；同一主体不能为 R3 动作提供两次批准。外部调用使用幂等键和原子 claim。
+- PostgreSQL 审计事件只追加，数据库触发器拒绝更新和删除。
+- token、Cookie、完整合同和真实平台凭证不进入模型上下文或浏览器 DTO。
 
-- 原始资产不可覆盖；修复必然生成新版本和可回溯 manifest。
-- 低风险只读与可逆动作可自动执行。
-- R2（公开元数据/平台提交）需要单人审批；R3（版权覆盖、删除线上版本、跨地区发布）需要双人审批。
-- 模型上下文仅接收最小化、脱敏的元数据；token、Cookie、完整合同和敏感信息不能进入日志。
+详细威胁边界与风险分级见[安全、权限与审计](docs/09-security-audit.md)。
 
-详见 [安全、权限与审计](docs/09-security-audit.md)。
+## 当前边界
 
-## 文档真源
+以下能力尚未完成，因此当前版本不能宣称“生产完成”：
 
-| 文档 | 说明 |
+- Redis/BullMQ 尚未接入，API 内的长流程还没有真正转移到独立 Worker 队列。
+- LangGraph checkpoint 目前由调用方传入/返回；API 的 `workflow_runs` 与 Worker 尚未使用同一个持久化 checkpointer 和一致状态流。
+- API 的 QC 编排尚未完全由已锁定 RuleSet 和上传检查结果驱动；缺失 RIGHTS 的 UNKNOWN 门禁、完整 TTML/修复资产流仍需收口。
+- 平台 Adapter 是确定性模拟器，尚未接入真实 YouTube/OTT provider、webhook、凭证轮换和限流策略。
+- 工作台尚未完成 Release 搜索、状态/平台筛选、上传进度显示、断点续传和全部稳定错误码。
+- Action/Approval/Delivery 已有幂等与 claim 基础，但事务一致性、租约恢复与 outbox 尚未形成完整并发故障闭环。
+- 100 包评测集、离线回放、质量指标和真实端到端验收证据尚未完成。
+- OpenTelemetry、指标/追踪/告警、数据库 readiness、独立 CORS frontend origin、容器镜像和完整部署流水线尚未落地。
+- LLM 规范解释、Finding 聚类和文案辅助尚未接入；当前系统刻意保持确定性且不依赖模型。
+
+实现路线见[实施计划](PLAN.md)与[评测计划](docs/08-evaluation.md)。
+
+## 文档索引
+
+| 文档 | 用途 |
 |---|---|
-| [产品定义](docs/01-product.md) | 用户、场景与成功指标 |
+| [产品定义](docs/01-product.md) | 用户、场景和价值 |
 | [范围与验收](docs/02-scope-acceptance.md) | MVP 范围、样例与 DoD |
-| [领域状态机](docs/03-domain-state.md) | 对象、状态和幂等键 |
+| [领域模型与状态机](docs/03-domain-state.md) | Release、状态与幂等规则 |
 | [系统架构](docs/04-architecture.md) | 服务边界与运行模式 |
-| [Agent 编排决策](docs/05-agent-orchestration.md) | LangGraph / LangChain 职责 |
-| [工具与 API 契约](docs/06-tool-contracts.md) | 工具、REST 和事件 |
-| [前端体验规格](docs/11-frontend-experience.md) | 官网与工作台的 UX |
-| [功能模块规格](docs/12-functional-modules.md) | 10 个可验收的功能模块 |
-| [前端构建契约](docs/13-frontend-build-contract.md) | 页面、组件、数据与交互 |
+| [Agent 编排](docs/05-agent-orchestration.md) | LangGraph、确定性工具和模型职责 |
+| [工具与 API 契约](docs/06-tool-contracts.md) | REST、工具和事件定义 |
+| [数据与存储](docs/07-data-model.md) | PostgreSQL、资产和审计模型 |
+| [评测计划](docs/08-evaluation.md) | 数据集、指标和验收方法 |
+| [安全、权限与审计](docs/09-security-audit.md) | JWT/RBAC、风险分级和日志边界 |
+| [实施路线图](docs/10-roadmap.md) | 后续阶段 |
+| [前端体验](docs/11-frontend-experience.md) | 官网与工作台 UX |
+| [功能模块](docs/12-functional-modules.md) | 可验收功能规格 |
+| [前端构建契约](docs/13-frontend-build-contract.md) | 页面、组件和数据契约 |
+| [仓库与部署结构](docs/14-repository-deployment.md) | 单仓库、多部署单元决策 |
 | [ADR 索引](docs/adr/README.md) | 关键架构决策 |
-
-## 路线图
-
-1. 确定性 QC：ffprobe、SRT/TTML、CPS、时间轴和版权窗口。
-2. 可恢复执行：PostgreSQL、BullMQ、checkpoint、审批、幂等与重试。
-3. 模型辅助：规范解释、Finding 聚类和结构化修复计划。
-4. 平台 Adapter：YouTube 与 OTT 沙箱、提交和回执。
-5. 生产灰度：单项目、单地区、所有高风险动作审批后执行。
 
 ## 贡献
 
-提交变更前运行：
+提交前至少运行：
 
-```bash
-pnpm typecheck && pnpm test && pnpm build
+```powershell
+pnpm lint && pnpm typecheck && pnpm test && pnpm build
 ```
 
-涉及领域状态、工具契约、权限或 UI 流程的变更，必须同步更新 `docs/` 对应规格与 ADR；不能用模型输出替代确定性 QC 或审批门禁。
+变更领域状态、工具契约、权限、部署边界或 UI 流程时，同步更新对应 `docs/` 或 ADR。不要用模型输出替代确定性 QC、审批门禁和服务端授权。
 
-## 许可证
+## License
 
 [MIT](LICENSE)
