@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { processNextEvaluation } from "@lrc/worker";
 import type { ActionDto, ApprovalDto, AssetDto, DeliveryAttemptDto, ReleaseDetailDto, ReleaseListPageDto, ReleaseSummaryDto, WorkflowResultDto } from "@lrc/contracts";
 import { AppModule } from "./app.module.js";
 import type { AuthPrincipal } from "./auth/auth.js";
@@ -16,6 +17,7 @@ import { configureHttpBodyParsing } from "./http-configuration.js";
 import { ORCHESTRATION_CLOCK } from "./workflow/orchestration.js";
 
 const TEST_AUTH_SECRET = "lrc-test-secret-is-at-least-thirty-two-bytes-long";
+const TEST_WORKER_SECRET = "lrc-worker-test-secret-is-at-least-thirty-two-bytes-long";
 const TEST_EVALUATION_AT = "2026-09-04T00:00:00.000Z";
 const VALID_SRT = "1\n00:00:00,000 --> 00:00:01,000\nHello\n";
 const VALID_RIGHTS = JSON.stringify({ validFrom: "2026-01-01T00:00:00.000Z", validUntil: "2026-12-31T00:00:00.000Z" });
@@ -332,6 +334,31 @@ test("a release can be created and listed", async () => {
     const releases = (await listResponse.json()) as ReleaseListPageDto;
     assert.deepEqual(releases.items.map(({ id }) => id), [created.id]);
   });
+});
+
+test("a queued release is evaluated by the HTTP Worker and returns to the approval flow", async () => {
+  const previousWorkerSecret = process.env.WORKER_SHARED_SECRET;
+  process.env.WORKER_SHARED_SECRET = TEST_WORKER_SECRET;
+  try {
+    await withApi(async (baseUrl) => {
+      const { release } = await createYoutubeFixture(baseUrl, { episode: "Background worker" });
+      const queued = await fetch(`${baseUrl}/releases/${release.id}/queue`, { method: "POST" });
+      assert.equal(queued.status, 201);
+      assert.equal(((await queued.json()) as { state: string }).state, "VALIDATING");
+      assert.equal(((await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto).state, "VALIDATING");
+
+      assert.equal(await processNextEvaluation({ apiUrl: baseUrl, secret: TEST_WORKER_SECRET, workerId: "e2e-worker" }), true);
+      assert.equal(await processNextEvaluation({ apiUrl: baseUrl, secret: TEST_WORKER_SECRET, workerId: "e2e-worker" }), false);
+
+      const completed = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+      assert.equal(completed.state, "READY_FOR_APPROVAL");
+      assert.equal(completed.findings.length, 0);
+      assert.equal(completed.actions.filter(({ type, status }) => type === "SUBMIT_DELIVERY" && status === "PENDING_APPROVAL").length, 1);
+    });
+  } finally {
+    if (previousWorkerSecret === undefined) delete process.env.WORKER_SHARED_SECRET;
+    else process.env.WORKER_SHARED_SECRET = previousWorkerSecret;
+  }
 });
 
 test("release listing applies authorized search, state, platform, and territory filters", async () => {

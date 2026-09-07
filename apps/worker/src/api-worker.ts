@@ -26,6 +26,6 @@ export async function processNextEvaluation(config: ApiWorkerConfig): Promise<bo
   const complete = await request(`${config.apiUrl.replace(/\/$/, "")}/internal/worker/complete`, {
     method: "POST", headers, body: JSON.stringify({ workerId: config.workerId, runId: body.run.id, attempt: body.run.attempt, result }),
   });
-  if (!complete.ok) throw new Error(`Worker completion failed: ${complete.status}`);
+  if (!complete.ok) throw new Error(`Worker completion failed: ${complete.status} ${await complete.text()}`);
   return true;
 }

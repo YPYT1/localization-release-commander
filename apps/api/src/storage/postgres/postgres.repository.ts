@@ -805,6 +805,14 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     return result.rows[0] ? this.workflowRun(result.rows[0]) : undefined;
   }
 
+  async releaseWorkflowRunLease(id: string): Promise<WorkflowRunRecord | undefined> {
+    const result = await this.pool.query<WorkflowRunRow>(
+      `UPDATE workflow_runs SET work_type = NULL, lease_owner = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1 RETURNING ${RUN_COLUMNS}`,
+      [id],
+    );
+    return result.rows[0] ? this.workflowRun(result.rows[0]) : undefined;
+  }
+
   async listWorkflowRuns(releaseId: string): Promise<WorkflowRunRecord[]> {
     const result = await this.pool.query<WorkflowRunRow>(`SELECT ${RUN_COLUMNS} FROM workflow_runs WHERE release_id = $1 ORDER BY created_at, id`, [releaseId]);
     return result.rows.map((row) => this.workflowRun(row));

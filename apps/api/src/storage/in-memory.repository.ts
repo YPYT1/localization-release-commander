@@ -411,6 +411,15 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     return copy(updated);
   }
 
+  async releaseWorkflowRunLease(id: string): Promise<WorkflowRunRecord | undefined> {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    const { type: _type, leaseOwner: _leaseOwner, leaseExpiresAt: _leaseExpiresAt, ...released } = run;
+    const updated = { ...released, updatedAt: new Date().toISOString() };
+    this.runs.set(id, updated);
+    return copy(updated);
+  }
+
   async listWorkflowRuns(releaseId: string): Promise<WorkflowRunRecord[]> {
     return [...this.runs.values()].filter((run) => run.releaseId === releaseId).map(copy);
   }

@@ -78,9 +78,19 @@ export class ReleaseWorkflowService {
     if (!run || run.type !== "EVALUATE_RELEASE") throw new NotFoundException("Queued workflow run not found");
     if (run.status !== "RUNNING" || run.leaseOwner !== workerId || run.attempt !== attempt) throw new ConflictException("Worker lease is no longer current");
     const release = await this.repository.getRelease(run.releaseId);
-    if (!release || release.state !== "VALIDATING") throw new ConflictException("Release is no longer awaiting worker evaluation");
+    if (!release) throw new ConflictException("Release is no longer awaiting worker evaluation");
+    if (release.state === "READY_FOR_APPROVAL") {
+      const action = release.actions.find((candidate) => candidate.type === "SUBMIT_DELIVERY" && candidate.status === "PENDING_APPROVAL");
+      if (!action) throw new ConflictException("Queued workflow has no pending submission action");
+      await this.repository.updateWorkflowRun(run.id, "WAITING", { state: "READY_FOR_APPROVAL", actionId: action.id, recovered: true });
+      await this.repository.releaseWorkflowRunLease(run.id);
+      return { releaseId: release.id, runId: run.id, state: "READY_FOR_APPROVAL", findings: release.findings, action };
+    }
+    if (release.state !== "VALIDATING") throw new ConflictException(`Release is no longer awaiting worker evaluation: ${release.state}`);
     const actor = typeof run.checkpoint.actorId === "string" ? run.checkpoint.actorId : `worker:${workerId}`;
-    return this.finishEvaluationRun(release, run.id, result, actor);
+    const completed = await this.finishEvaluationRun(release, run.id, result, actor);
+    await this.repository.releaseWorkflowRunLease(run.id);
+    return completed;
   }
 
   private async finishEvaluationRun(release: ReleaseDetailDto, runId: string, result: OrchestrationRunResult, actor: string): Promise<WorkflowResultDto> {

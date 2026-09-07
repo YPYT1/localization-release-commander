@@ -209,5 +209,6 @@ export interface ReleaseRepository {
   claimWorkflow(releaseId: string, graphVersion: string, queued?: QueuedWorkflow): Promise<WorkflowClaim | undefined>;
   failWorkflow(releaseId: string, runId: string, expectedVersion: number, previousState: ReleaseState, checkpoint: Record<string, unknown>): Promise<boolean>;
   updateWorkflowRun(id: string, status: WorkflowRunRecord["status"], checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord | undefined>;
+  releaseWorkflowRunLease(id: string): Promise<WorkflowRunRecord | undefined>;
   listWorkflowRuns(releaseId: string): Promise<WorkflowRunRecord[]>;
 }
