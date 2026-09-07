@@ -37,7 +37,8 @@ export function AddAssetForm({ releaseId }: { releaseId: string }) {
   const router = useRouter();
   const [state, setState] = useState(initialFormState);
   const [pending, setPending] = useState(false);
-  const uploadController = useRef<AbortController | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
+  const uploadRequest = useRef<XMLHttpRequest | null>(null);
 
   async function upload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -65,25 +66,36 @@ export function AddAssetForm({ releaseId }: { releaseId: string }) {
     }
 
     setPending(true);
+    setProgress(0);
     setState(initialFormState);
-    const controller = new AbortController();
-    uploadController.current = controller;
     try {
-      const response = await fetch(`/api/releases/${encodeURIComponent(releaseId)}/assets/upload`, {
-        method: "POST",
-        body: formData,
-        signal: controller.signal,
+      const response = await new Promise<{ status: number; payload: { message?: unknown } | null }>((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        uploadRequest.current = request;
+        request.open("POST", `/api/releases/${encodeURIComponent(releaseId)}/assets/upload`);
+        request.responseType = "json";
+        request.upload.onprogress = (event) => {
+          if (event.lengthComputable) setProgress(Math.min(100, Math.round(event.loaded / event.total * 100)));
+        };
+        request.onload = () => resolve({
+          status: request.status,
+          payload: request.response && typeof request.response === "object" ? request.response as { message?: unknown } : (() => {
+            try { return JSON.parse(request.responseText) as { message?: unknown }; } catch { return null; }
+          })(),
+        });
+        request.onerror = () => reject(new Error("upload request failed"));
+        request.onabort = () => reject(new DOMException("Upload aborted", "AbortError"));
+        request.send(formData);
       });
       if (response.status === 401) {
         router.replace(`/login?expired=1&next=${encodeURIComponent(location.pathname)}`);
         router.refresh();
         return;
       }
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { message?: unknown } | null;
-        const message = Array.isArray(payload?.message)
-          ? payload.message.filter((item): item is string => typeof item === "string").join("；")
-          : typeof payload?.message === "string" ? payload.message : "上传未被服务接受。";
+      if (response.status < 200 || response.status >= 300) {
+        const message = Array.isArray(response.payload?.message)
+          ? response.payload.message.filter((item): item is string => typeof item === "string").join("；")
+          : typeof response.payload?.message === "string" ? response.payload.message : "上传未被服务接受。";
         setState({ status: "error", message });
         return;
       }
@@ -95,7 +107,8 @@ export function AddAssetForm({ releaseId }: { releaseId: string }) {
         ? { status: "idle", message: "上传已取消。" }
         : { status: "error", message: "上传服务暂时不可用，请稍后重试。" });
     } finally {
-      if (uploadController.current === controller) uploadController.current = null;
+      uploadRequest.current = null;
+      setProgress(null);
       setPending(false);
     }
   }
@@ -103,7 +116,8 @@ export function AddAssetForm({ releaseId }: { releaseId: string }) {
   return <details className="asset-register"><summary>上传资产 <span aria-hidden="true">＋</span></summary><form onSubmit={upload} aria-busy={pending}>
     <div className="field-grid compact"><label><span>类型 *</span><select name="kind" defaultValue="SUBTITLE" required><option>VIDEO</option><option>SUBTITLE</option><option>AUDIO</option><option>POSTER</option><option>METADATA</option><option>RIGHTS</option></select></label><label><span>文件 *</span><input name="file" type="file" required /><small>单文件上限 500 MiB</small></label><label><span>语言</span><input name="language" placeholder="en" /></label></div>
     <label className="wide-field"><span>元数据 JSON</span><textarea name="metadata" placeholder={'{"source": "operator-upload"}'} /></label>
-    <Feedback state={state} pendingMessage={pending ? "正在上传，请勿关闭页面。" : undefined} /><div className="form-actions">{pending ? <button className="quiet-button" type="button" onClick={() => uploadController.current?.abort()}>取消上传</button> : null}<button className="primary-button" type="submit" disabled={pending}>{pending ? "正在上传…" : "上传并登记"}</button></div>
+    {pending ? <div className="upload-progress" role="status" aria-live="polite"><div><span>浏览器传输到交付服务</span><strong>{progress === null || progress < 100 ? `${progress ?? 0}%` : "等待服务端检查与登记"}</strong></div><progress value={progress ?? 0} max={100} aria-label="上传传输进度" /><small>{progress === null || progress < 100 ? "传输完成前可取消。" : "文件已发送，正在等待 API 保存并检查。"}</small></div> : null}
+    <Feedback state={state} /><div className="form-actions">{pending ? <button className="quiet-button" type="button" onClick={() => uploadRequest.current?.abort()}>取消上传</button> : null}<button className="primary-button" type="submit" disabled={pending}>{pending ? "正在上传…" : "上传并登记"}</button></div>
   </form></details>;
 }
 
