@@ -27,13 +27,16 @@ import {
   resolveAssetRegistrationVerification,
   type AssetRegistrationResult,
   type AssetAuditContext,
+  type ApprovalDecisionResult,
   type NewAssetRecord,
   type AuditFilter,
   type NewAction,
   type NewDelivery,
   type NewFinding,
+  type NewSubmission,
   type ReleaseRecord,
   type ReleaseRepository,
+  type WorkflowClaim,
   type WorkflowRunRecord,
 } from "../../domain/repository.js";
 
@@ -244,6 +247,17 @@ export class PostgresReleaseRepository implements ReleaseRepository {
         await client.query("ROLLBACK");
         return { outcome: "not_mutable", state };
       }
+      const running = await client.query<{ id: string }>(
+        "SELECT id::text AS id FROM actions WHERE release_id = $1 AND status = 'RUNNING'",
+        [input.releaseId],
+      );
+      const blocked = audit.actionId
+        ? running.rows.length !== 1 || running.rows[0]!.id !== audit.actionId
+        : running.rows.length > 0;
+      if (blocked) {
+        await client.query("ROLLBACK");
+        return { outcome: "action_running" };
+      }
 
       const created = await this.insertAsset(client, input);
       const asset = created ?? await this.findEquivalentAsset(client, input);
@@ -355,9 +369,72 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     return this.action(result.rows[0]!);
   }
 
+  async ensureAction(input: NewAction): Promise<{ action: ActionDto; created: boolean }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.idempotencyKey]);
+      const inserted = await client.query<ActionRow>(
+        `INSERT INTO actions(id, release_id, type, risk, input_json, output_json, idempotency_key, status)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+         ON CONFLICT (idempotency_key) DO NOTHING RETURNING ${ACTION_COLUMNS}`,
+        [randomUUID(), input.releaseId, input.type, input.risk, JSON.stringify(input.input), input.output == null ? null : JSON.stringify(input.output), input.idempotencyKey, input.status],
+      );
+      if (inserted.rows[0]) {
+        await client.query("COMMIT");
+        return { action: this.action(inserted.rows[0]), created: true };
+      }
+      const existing = await client.query<ActionRow>(`SELECT ${ACTION_COLUMNS} FROM actions WHERE idempotency_key = $1`, [input.idempotencyKey]);
+      if (!existing.rows[0]) throw new Error("Action conflict could not be resolved");
+      await client.query("COMMIT");
+      return { action: this.action(existing.rows[0]), created: false };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getAction(id: string): Promise<ActionDto | undefined> {
     const result = await this.pool.query<ActionRow>(`SELECT ${ACTION_COLUMNS} FROM actions WHERE id = $1`, [id]);
     return result.rows[0] ? this.action(result.rows[0]) : undefined;
+  }
+
+  async claimAction(id: string): Promise<{ action: ActionDto; claimed: boolean } | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const owner = await client.query<{ releaseId: string }>(`SELECT release_id AS "releaseId" FROM actions WHERE id = $1`, [id]);
+      if (!owner.rows[0]) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      await client.query("SELECT id FROM releases WHERE id = $1 FOR UPDATE", [owner.rows[0].releaseId]);
+      const candidate = await client.query<ActionRow>(`SELECT ${ACTION_COLUMNS} FROM actions WHERE id = $1 FOR UPDATE`, [id]);
+      const action = candidate.rows[0] ? this.action(candidate.rows[0]) : undefined;
+      if (!action) throw new Error("Action disappeared during claim");
+      if (action.status !== "PROPOSED") {
+        await client.query("ROLLBACK");
+        return { action, claimed: false };
+      }
+      const running = await client.query("SELECT 1 FROM actions WHERE release_id = $1 AND status = 'RUNNING' LIMIT 1", [action.releaseId]);
+      if (running.rowCount) {
+        await client.query("ROLLBACK");
+        return { action, claimed: false };
+      }
+      const claimed = await client.query<ActionRow>(
+        `UPDATE actions SET status = 'RUNNING' WHERE id = $1 RETURNING ${ACTION_COLUMNS}`,
+        [id],
+      );
+      await client.query("COMMIT");
+      return { action: this.action(claimed.rows[0]!), claimed: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async updateAction(id: string, status: ActionStatus, output: Record<string, unknown> | null = null): Promise<ActionDto | undefined> {
@@ -375,6 +452,73 @@ export class PostgresReleaseRepository implements ReleaseRepository {
       [randomUUID(), input.actionId, input.actorId, input.decision, input.reason],
     );
     return this.approval(result.rows[0]!);
+  }
+
+  async decideApproval(input: Omit<ApprovalDto, "id" | "decidedAt"> & { requiredApprovals: number }): Promise<ApprovalDecisionResult | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const owner = await client.query<{ releaseId: string }>(`SELECT release_id AS "releaseId" FROM actions WHERE id = $1`, [input.actionId]);
+      if (!owner.rows[0]) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const releaseResult = await client.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases WHERE id = $1 FOR UPDATE`, [owner.rows[0].releaseId]);
+      if (!releaseResult.rows[0]) throw new Error("Release not found during approval decision");
+      let release = this.release(releaseResult.rows[0]);
+      const actionResult = await client.query<ActionRow>(`SELECT ${ACTION_COLUMNS} FROM actions WHERE id = $1 FOR UPDATE`, [input.actionId]);
+      if (!actionResult.rows[0]) throw new Error("Action disappeared during approval decision");
+      let action = this.action(actionResult.rows[0]);
+
+      const existing = await client.query<ApprovalRow>(
+        `SELECT ${APPROVAL_COLUMNS} FROM approvals WHERE action_id = $1 AND actor_id = $2`,
+        [input.actionId, input.actorId],
+      );
+      if (existing.rows[0]) {
+        await client.query("COMMIT");
+        return { approval: this.approval(existing.rows[0]), action, release, created: false };
+      }
+      if (action.status !== "PENDING_APPROVAL") {
+        await client.query("COMMIT");
+        return { action, release, created: false };
+      }
+
+      const approvalResult = await client.query<ApprovalRow>(
+        `INSERT INTO approvals(id, action_id, actor_id, decision, reason) VALUES ($1, $2, $3, $4, $5) RETURNING ${APPROVAL_COLUMNS}`,
+        [randomUUID(), input.actionId, input.actorId, input.decision, input.reason],
+      );
+      const approval = this.approval(approvalResult.rows[0]!);
+      if (approval.decision === "REJECTED") {
+        const actionUpdate = await client.query<ActionRow>(`UPDATE actions SET status = 'REJECTED' WHERE id = $1 RETURNING ${ACTION_COLUMNS}`, [action.id]);
+        const releaseUpdate = await client.query<ReleaseRow>(
+          `UPDATE releases SET state = 'BLOCKED', version = version + 1, updated_at = now() WHERE id = $1 RETURNING ${RELEASE_COLUMNS}`,
+          [release.id],
+        );
+        action = this.action(actionUpdate.rows[0]!);
+        release = this.release(releaseUpdate.rows[0]!);
+      } else {
+        const approvals = await client.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM approvals WHERE action_id = $1 AND decision = 'APPROVED'`,
+          [action.id],
+        );
+        if (Number(approvals.rows[0]?.count ?? 0) >= input.requiredApprovals) {
+          const actionUpdate = await client.query<ActionRow>(`UPDATE actions SET status = 'APPROVED' WHERE id = $1 RETURNING ${ACTION_COLUMNS}`, [action.id]);
+          const releaseUpdate = await client.query<ReleaseRow>(
+            `UPDATE releases SET state = 'APPROVED', version = version + 1, updated_at = now() WHERE id = $1 RETURNING ${RELEASE_COLUMNS}`,
+            [release.id],
+          );
+          action = this.action(actionUpdate.rows[0]!);
+          release = this.release(releaseUpdate.rows[0]!);
+        }
+      }
+      await client.query("COMMIT");
+      return { approval, action, release, created: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listApprovals(actionId: string): Promise<ApprovalDto[]> {
@@ -397,6 +541,43 @@ export class PostgresReleaseRepository implements ReleaseRepository {
       [randomUUID(), input.releaseId, input.provider, input.requestId ?? "", input.status, JSON.stringify(input.response ?? {})],
     );
     return this.delivery(result.rows[0]!);
+  }
+
+  async ensureSubmission(input: NewSubmission): Promise<{ action: ActionDto; delivery: DeliveryAttemptDto; created: boolean }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.idempotencyKey]);
+      const existingResult = await client.query<ActionRow>(`SELECT ${ACTION_COLUMNS} FROM actions WHERE idempotency_key = $1`, [input.idempotencyKey]);
+      if (existingResult.rows[0]) {
+        const action = this.action(existingResult.rows[0]);
+        const deliveryId = action.input.deliveryId;
+        if (typeof deliveryId !== "string") throw new Error("Submission action does not reference a delivery");
+        const deliveryResult = await client.query<DeliveryRow>(`SELECT ${DELIVERY_COLUMNS} FROM delivery_attempts WHERE id = $1`, [deliveryId]);
+        if (!deliveryResult.rows[0]) throw new Error("Submission delivery not found");
+        await client.query("COMMIT");
+        return { action, delivery: this.delivery(deliveryResult.rows[0]), created: false };
+      }
+
+      const deliveryId = randomUUID();
+      const deliveryResult = await client.query<DeliveryRow>(
+        `INSERT INTO delivery_attempts(id, release_id, provider, request_id, status, response_json)
+         VALUES ($1, $2, $3, '', 'PENDING', '{}'::jsonb) RETURNING ${DELIVERY_COLUMNS}`,
+        [deliveryId, input.releaseId, input.provider],
+      );
+      const actionResult = await client.query<ActionRow>(
+        `INSERT INTO actions(id, release_id, type, risk, input_json, output_json, idempotency_key, status)
+         VALUES ($1, $2, 'SUBMIT_DELIVERY', $3, $4::jsonb, NULL, $5, 'PENDING_APPROVAL') RETURNING ${ACTION_COLUMNS}`,
+        [randomUUID(), input.releaseId, input.risk, JSON.stringify({ ...input.input, deliveryId }), input.idempotencyKey],
+      );
+      await client.query("COMMIT");
+      return { action: this.action(actionResult.rows[0]!), delivery: this.delivery(deliveryResult.rows[0]!), created: true };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getDelivery(id: string): Promise<DeliveryAttemptDto | undefined> {
@@ -464,6 +645,79 @@ export class PostgresReleaseRepository implements ReleaseRepository {
       [randomUUID(), releaseId, graphVersion],
     );
     return this.workflowRun(result.rows[0]!);
+  }
+
+  async claimWorkflow(releaseId: string, graphVersion: string): Promise<WorkflowClaim | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const releaseResult = await client.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases WHERE id = $1 FOR UPDATE`, [releaseId]);
+      if (!releaseResult.rows[0]) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const active = await client.query(
+        `SELECT 1 FROM workflow_runs WHERE release_id = $1 AND graph_version = $2 AND status = 'RUNNING' LIMIT 1`,
+        [releaseId, graphVersion],
+      );
+      if (active.rowCount) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const runResult = await client.query<WorkflowRunRow>(
+        `INSERT INTO workflow_runs(id, release_id, graph_version, status) VALUES ($1, $2, $3, 'RUNNING') RETURNING ${RUN_COLUMNS}`,
+        [randomUUID(), releaseId, graphVersion],
+      );
+      const claimedRelease = await client.query<ReleaseRow>(
+        `UPDATE releases SET state = 'VALIDATING', version = version + 1, updated_at = now() WHERE id = $1 RETURNING ${RELEASE_COLUMNS}`,
+        [releaseId],
+      );
+      await client.query("COMMIT");
+      return {
+        run: this.workflowRun(runResult.rows[0]!),
+        previousState: releaseResult.rows[0].state,
+        version: claimedRelease.rows[0]!.version,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async failWorkflow(
+    releaseId: string,
+    runId: string,
+    expectedVersion: number,
+    previousState: ReleaseState,
+    checkpoint: Record<string, unknown>,
+  ): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const failedRun = await client.query<WorkflowRunRow>(
+        `UPDATE workflow_runs SET status = 'FAILED', checkpoint_json = $3::jsonb, updated_at = now()
+         WHERE id = $1 AND release_id = $2 AND status = 'RUNNING' RETURNING ${RUN_COLUMNS}`,
+        [runId, releaseId, JSON.stringify(checkpoint)],
+      );
+      if (!failedRun.rows[0]) {
+        await client.query("ROLLBACK");
+        return false;
+      }
+      const restored = await client.query(
+        `UPDATE releases SET state = $3, version = version + 1, updated_at = now()
+         WHERE id = $1 AND version = $2 AND state = 'VALIDATING'`,
+        [releaseId, expectedVersion, previousState],
+      );
+      await client.query("COMMIT");
+      return restored.rowCount === 1;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async updateWorkflowRun(id: string, status: WorkflowRunRecord["status"], checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord | undefined> {

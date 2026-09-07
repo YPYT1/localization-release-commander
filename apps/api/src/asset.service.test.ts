@@ -79,3 +79,75 @@ test("an uncertain commit result preserves the immutable object for later reconc
     await rm(rootDir, { recursive: true, force: true });
   }
 });
+
+test("a claimed action blocks external uploads but can persist its own derived asset", async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), "lrc-asset-action-"));
+  const repository = new InMemoryReleaseRepository();
+  try {
+    const { release, service } = await createService(repository, rootDir);
+    const source = await service.addContent(release.id, {
+      kind: "SUBTITLE",
+      language: "en",
+      fileName: "source.srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+    }, ADMIN);
+    const action = await repository.createAction({
+      releaseId: release.id,
+      type: "REPAIR_SUBTITLE",
+      risk: "R1",
+      status: "PROPOSED",
+      input: { assetId: source.id, sourceSha256: source.sha256 },
+      idempotencyKey: `${release.id}:repair:${source.sha256}`,
+    });
+    assert.equal((await repository.claimAction(action.id))?.claimed, true);
+
+    await assert.rejects(
+      service.addContent(release.id, {
+        kind: "SUBTITLE",
+        language: "en",
+        fileName: "concurrent.srt",
+        content: "1\n00:00:00,000 --> 00:00:01,000\nConcurrent\n",
+      }, ADMIN),
+      (error: unknown) => typeof error === "object" && error !== null && "getStatus" in error
+        && typeof error.getStatus === "function" && error.getStatus() === 409,
+    );
+
+    const derived = await service.addDerived(release.id, {
+      kind: "SUBTITLE",
+      subtitleFormat: "SRT",
+      language: "en",
+      fileName: "source.repaired.srt",
+      content: "1\n00:00:00,000 --> 00:00:01,000\nRepaired\n",
+      parentAssetId: source.id,
+    }, ADMIN, action.id);
+    assert.equal(derived.parentAssetId, source.id);
+    assert.equal((await repository.getRelease(release.id))?.assets.length, 2);
+    assert.equal(await fileCount(rootDir), 2);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("in-memory ensureAction is idempotent under concurrent calls", async () => {
+  const repository = new InMemoryReleaseRepository();
+  const project = await repository.createProject("Action Test Studio");
+  const release = await repository.createRelease({
+    projectId: project.id,
+    ruleSetId: "youtube-en-v1",
+    episode: "Episode Action",
+    territory: "US",
+    platform: "YOUTUBE",
+    language: "en",
+  });
+  const input = {
+    releaseId: release.id,
+    type: "REPAIR_SUBTITLE",
+    risk: "R1" as const,
+    status: "PROPOSED" as const,
+    input: { assetId: "source" },
+    idempotencyKey: `${release.id}:repair:source`,
+  };
+  const results = await Promise.all([repository.ensureAction(input), repository.ensureAction(input)]);
+  assert.equal(results[0].action.id, results[1].action.id);
+  assert.deepEqual(results.map(({ created }) => created).sort(), [false, true]);
+});

@@ -10,7 +10,7 @@ import { ReleaseService } from "./release.service.js";
 import { ReadModelController } from "./read-model.controller.js";
 import { ActionsController } from "./actions.controller.js";
 import { DeliveriesController } from "./deliveries.controller.js";
-import { DeterministicOrchestrationService, ORCHESTRATION_SERVICE } from "./workflow/orchestration.js";
+import { DeterministicOrchestrationService, ORCHESTRATION_CLOCK, ORCHESTRATION_SERVICE } from "./workflow/orchestration.js";
 import { ReleaseWorkflowService } from "./workflow/release-workflow.service.js";
 import { AUTH_SECRET, AuthGuard, AuthTokenService, loadAuthSecret } from "./auth/auth.js";
 import { ProjectAccessService } from "./auth/project-access.service.js";
@@ -50,6 +50,7 @@ import { UploadAssetGuard } from "./upload-asset.guard.js";
     { provide: FFPROBE_RUNNER, useValue: nodeCommandRunner },
     { provide: AUTH_SECRET, useFactory: loadAuthSecret },
     { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: ORCHESTRATION_CLOCK, useValue: () => new Date().toISOString() },
     { provide: ORCHESTRATION_SERVICE, useExisting: DeterministicOrchestrationService },
     { provide: RELEASE_REPOSITORY, useFactory: () => createReleaseRepository(process.env.DATABASE_URL) },
   ],

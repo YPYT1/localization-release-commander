@@ -57,6 +57,27 @@ export interface NewDelivery {
   response?: Record<string, unknown>;
 }
 
+export interface NewSubmission {
+  releaseId: string;
+  provider: Platform;
+  risk: "R2" | "R3";
+  input: Record<string, unknown>;
+  idempotencyKey: string;
+}
+
+export interface ApprovalDecisionResult {
+  approval?: ApprovalDto;
+  action: ActionDto;
+  release: ReleaseRecord;
+  created: boolean;
+}
+
+export interface WorkflowClaim {
+  run: WorkflowRunRecord;
+  previousState: ReleaseState;
+  version: number;
+}
+
 export interface AuditFilter {
   releaseId?: string;
   projectIds?: readonly string[];
@@ -69,6 +90,7 @@ export interface AuditFilter {
 export interface AssetAuditContext {
   actor: string;
   sizeBytes: number;
+  actionId?: string;
 }
 
 export interface NewAssetRecord {
@@ -85,7 +107,8 @@ export interface NewAssetRecord {
 export type AssetRegistrationResult =
   | { outcome: "created"; asset: AssetDto }
   | { outcome: "existing"; asset: AssetDto }
-  | { outcome: "not_mutable"; state: ReleaseState };
+  | { outcome: "not_mutable"; state: ReleaseState }
+  | { outcome: "action_running" };
 
 export class AssetRegistrationUncertainError extends Error {
   constructor(cause?: unknown) {
@@ -98,7 +121,7 @@ export function resolveAssetRegistrationVerification(
   input: NewAssetRecord,
   asset: AssetDto | undefined,
   cause?: unknown,
-): Exclude<AssetRegistrationResult, { outcome: "not_mutable" }> {
+): Extract<AssetRegistrationResult, { outcome: "created" | "existing" }> {
   if (!asset) throw new AssetRegistrationUncertainError(cause);
   return asset.uri === input.uri ? { outcome: "created", asset } : { outcome: "existing", asset };
 }
@@ -127,14 +150,18 @@ export interface ReleaseRepository {
 
   findActionByIdempotencyKey(idempotencyKey: string): Promise<ActionDto | undefined>;
   createAction(input: NewAction): Promise<ActionDto>;
+  ensureAction(input: NewAction): Promise<{ action: ActionDto; created: boolean }>;
   getAction(id: string): Promise<ActionDto | undefined>;
+  claimAction(id: string): Promise<{ action: ActionDto; claimed: boolean } | undefined>;
   updateAction(id: string, status: ActionStatus, output?: Record<string, unknown> | null): Promise<ActionDto | undefined>;
 
   createApproval(input: Omit<ApprovalDto, "id" | "decidedAt">): Promise<ApprovalDto>;
+  decideApproval(input: Omit<ApprovalDto, "id" | "decidedAt"> & { requiredApprovals: number }): Promise<ApprovalDecisionResult | undefined>;
   listApprovals(actionId: string): Promise<ApprovalDto[]>;
 
   findDeliveryForRelease(releaseId: string): Promise<DeliveryAttemptDto | undefined>;
   createDelivery(input: NewDelivery): Promise<DeliveryAttemptDto>;
+  ensureSubmission(input: NewSubmission): Promise<{ action: ActionDto; delivery: DeliveryAttemptDto; created: boolean }>;
   getDelivery(id: string): Promise<DeliveryAttemptDto | undefined>;
   claimDelivery(id: string): Promise<{ delivery: DeliveryAttemptDto; claimed: boolean } | undefined>;
   updateDelivery(id: string, status: DeliveryStatus, requestId: string, response: Record<string, unknown>): Promise<DeliveryAttemptDto | undefined>;
@@ -143,6 +170,8 @@ export interface ReleaseRepository {
   listAudit(filter?: AuditFilter): Promise<AuditEventDto[]>;
 
   createWorkflowRun(releaseId: string, graphVersion: string): Promise<WorkflowRunRecord>;
+  claimWorkflow(releaseId: string, graphVersion: string): Promise<WorkflowClaim | undefined>;
+  failWorkflow(releaseId: string, runId: string, expectedVersion: number, previousState: ReleaseState, checkpoint: Record<string, unknown>): Promise<boolean>;
   updateWorkflowRun(id: string, status: WorkflowRunRecord["status"], checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord | undefined>;
   listWorkflowRuns(releaseId: string): Promise<WorkflowRunRecord[]>;
 }

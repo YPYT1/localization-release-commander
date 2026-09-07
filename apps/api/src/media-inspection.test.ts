@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { FfprobeService, type CommandRunner } from "./storage/media-inspection.service.js";
+import { AssetInspectionService, FfprobeService, type CommandRunner } from "./storage/media-inspection.service.js";
 
 test("ffprobe inspection uses an argument array, timeout, and normalized metadata", async () => {
   const calls: Array<{ executable: string; args: readonly string[]; options: Parameters<CommandRunner["execFile"]>[2] }> = [];
@@ -50,5 +53,38 @@ test("ffprobe inspection reports missing binaries and timeouts as service failur
       return typeof caught === "object" && caught !== null && "getStatus" in caught
         && typeof caught.getStatus === "function" && caught.getStatus() === 503;
     });
+  }
+});
+
+test("structured inspection records SRT format and derives rights only from a valid time window", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lrc-inspection-"));
+  const service = new AssetInspectionService(new FfprobeService({ async execFile() { throw new Error("unused"); } }, {}));
+  try {
+    const subtitlePath = join(directory, "subtitle.srt");
+    await writeFile(subtitlePath, "1\n00:00:00,000 --> 00:00:01,000\nHello\n", "utf8");
+    const subtitle = await service.inspect({ path: subtitlePath, kind: "SUBTITLE", fileName: "subtitle.srt", language: "en", sizeBytes: 44 });
+    assert.deepEqual(subtitle.subtitle, { format: "SRT", valid: true, cueCount: 1, durationMs: 1000, findings: [] });
+
+    const rightsPath = join(directory, "rights.json");
+    const validWindow = JSON.stringify({ validFrom: "2026-01-01T00:00:00.000Z", validUntil: "2026-12-31T00:00:00.000Z" });
+    await writeFile(rightsPath, validWindow, "utf8");
+    const rights = await service.inspect({ path: rightsPath, kind: "RIGHTS", fileName: "rights.json", sizeBytes: Buffer.byteLength(validWindow) });
+    assert.equal(rights.validFrom, "2026-01-01T00:00:00.000Z");
+    assert.equal(rights.validUntil, "2026-12-31T00:00:00.000Z");
+
+    for (const invalid of [
+      { status: "VALID" },
+      { validFrom: "2026-01-01", validUntil: "2026-12-31T00:00:00.000Z" },
+      { validFrom: "2026-12-31T00:00:00.000Z", validUntil: "2026-01-01T00:00:00.000Z" },
+    ]) {
+      const content = JSON.stringify(invalid);
+      await writeFile(rightsPath, content, "utf8");
+      await assert.rejects(
+        service.inspect({ path: rightsPath, kind: "RIGHTS", fileName: "rights.json", sizeBytes: Buffer.byteLength(content) }),
+        /RIGHTS/,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 });

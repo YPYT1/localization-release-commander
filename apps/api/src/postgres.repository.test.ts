@@ -96,19 +96,89 @@ test("the PostgreSQL repository persists a complete release aggregate", { skip: 
     assert.equal(secondDerived.outcome, "created");
     if (firstDerived.outcome !== "created" || secondDerived.outcome !== "created") throw new Error("Expected parent-specific derived assets");
     assert.notEqual(firstDerived.asset.id, secondDerived.asset.id);
+
+    const firstRemediationInput = {
+      releaseId: release.id,
+      type: "REPAIR_SUBTITLE",
+      risk: "R1",
+      status: "PROPOSED",
+      input: { assetId: firstDerived.asset.id },
+      idempotencyKey: `${release.id}:repair:first`,
+    } as const;
+    const ensuredActions = await Promise.all([
+      repository.ensureAction(firstRemediationInput),
+      repository.ensureAction(firstRemediationInput),
+    ]);
+    assert.equal(ensuredActions[0].action.id, ensuredActions[1].action.id);
+    assert.deepEqual(ensuredActions.map(({ created }) => created).sort(), [false, true]);
+    const firstRemediation = ensuredActions[0].action;
+    const secondRemediation = await repository.createAction({
+      releaseId: release.id,
+      type: "GENERATE_TTML",
+      risk: "R1",
+      status: "PROPOSED",
+      input: { assetId: firstDerived.asset.id },
+      idempotencyKey: `${release.id}:ttml:first`,
+    });
+    const concurrentClaims = await Promise.all([
+      repository.claimAction(firstRemediation.id),
+      repository.claimAction(firstRemediation.id),
+    ]);
+    assert.deepEqual(concurrentClaims.map((claim) => claim?.claimed).sort(), [false, true]);
+    assert.equal((await repository.claimAction(secondRemediation.id))?.claimed, false);
+
+    const blockedUpload = await repository.registerAsset({
+      releaseId: release.id,
+      kind: "METADATA",
+      fileName: "concurrent.json",
+      uri: "s3://test/concurrent.json",
+      sha256: "d".repeat(64),
+      metadata: {},
+    }, { actor: "test", sizeBytes: 100 });
+    assert.deepEqual(blockedUpload, { outcome: "action_running" });
+    const actionDerived = await repository.registerAsset({
+      releaseId: release.id,
+      parentAssetId: firstDerived.asset.id,
+      kind: "SUBTITLE",
+      language: "en",
+      fileName: "action-derived.srt",
+      uri: "s3://test/action-derived.srt",
+      sha256: "e".repeat(64),
+      metadata: {},
+    }, { actor: "test", sizeBytes: 100, actionId: firstRemediation.id });
+    assert.equal(actionDerived.outcome, "created");
+    await repository.updateAction(firstRemediation.id, "COMPLETED");
+    assert.equal((await repository.claimAction(secondRemediation.id))?.claimed, true);
+    await repository.updateAction(secondRemediation.id, "COMPLETED");
+
     await repository.replaceFindings(release.id, [
       { code: "DEMO", severity: "WARNING", message: "Demo finding", source: "test", status: "OPEN", evidence: { assetId: asset.id } },
     ]);
-    const action = await repository.createAction({
+    const submissionInput = {
       releaseId: release.id,
-      type: "SUBMIT_DELIVERY",
-      risk: "R2",
-      status: "PENDING_APPROVAL",
+      provider: "YOUTUBE" as const,
+      risk: "R2" as const,
       input: { assetId: asset.id },
       idempotencyKey: `${release.id}:submit:v1:YOUTUBE`,
+    };
+    const submissions = await Promise.all([
+      repository.ensureSubmission(submissionInput),
+      repository.ensureSubmission(submissionInput),
+    ]);
+    assert.equal(submissions[0].action.id, submissions[1].action.id);
+    assert.equal(submissions[0].delivery.id, submissions[1].delivery.id);
+    assert.deepEqual(submissions.map(({ created }) => created).sort(), [false, true]);
+    const { action, delivery } = submissions[0];
+    const approval = await repository.decideApproval({
+      actionId: action.id,
+      actorId: "approver",
+      decision: "APPROVED",
+      reason: "Reviewed",
+      requiredApprovals: 1,
     });
-    await repository.createApproval({ actionId: action.id, actorId: "approver", decision: "APPROVED", reason: "Reviewed" });
-    const delivery = await repository.createDelivery({ releaseId: release.id, provider: "YOUTUBE", status: "PENDING" });
+    assert.equal(approval?.created, true);
+    assert.equal(approval?.action.status, "APPROVED");
+    assert.equal(approval?.release.state, "APPROVED");
     const firstClaim = await repository.claimDelivery(delivery.id);
     const secondClaim = await repository.claimDelivery(delivery.id);
     assert.equal(firstClaim?.claimed, true);
@@ -117,6 +187,31 @@ test("the PostgreSQL repository persists a complete release aggregate", { skip: 
     await repository.appendAudit({ releaseId: foreignRelease.id, type: "release.created", actor: "foreign", payload: { version: 1 } });
     const run = await repository.createWorkflowRun(release.id, "test-graph-v1");
     await repository.updateWorkflowRun(run.id, "WAITING", { actionId: action.id });
+
+    const conflictingApprovalAction = await repository.createAction({
+      releaseId: release.id,
+      type: "SUBMIT_DELIVERY",
+      risk: "R2",
+      status: "PENDING_APPROVAL",
+      input: {},
+      idempotencyKey: `${release.id}:approval-race`,
+    });
+    const approvalRace = await Promise.all([
+      repository.decideApproval({ actionId: conflictingApprovalAction.id, actorId: "approver-a", decision: "REJECTED", reason: "Mismatch", requiredApprovals: 1 }),
+      repository.decideApproval({ actionId: conflictingApprovalAction.id, actorId: "approver-b", decision: "APPROVED", reason: "Reviewed", requiredApprovals: 1 }),
+    ]);
+    assert.equal(approvalRace.filter((decision) => decision?.created).length, 1);
+    assert.equal((await repository.listApprovals(conflictingApprovalAction.id)).length, 1);
+
+    const workflowClaim = await repository.claimWorkflow(release.id, "transaction-graph-v1");
+    assert.ok(workflowClaim);
+    assert.equal(await repository.claimWorkflow(release.id, "transaction-graph-v1"), undefined);
+    await repository.updateReleaseState(release.id, "BLOCKED");
+    assert.equal(
+      await repository.failWorkflow(release.id, workflowClaim.run.id, workflowClaim.version, workflowClaim.previousState, { error: "stale" }),
+      false,
+    );
+    assert.equal((await repository.listWorkflowRuns(release.id)).find(({ id }) => id === workflowClaim.run.id)?.status, "FAILED");
 
     await repository.updateReleaseState(release.id, "READY_FOR_APPROVAL");
     const immutableRegistration = await repository.registerAsset({
@@ -132,13 +227,13 @@ test("the PostgreSQL repository persists a complete release aggregate", { skip: 
     const reloaded = await repository.getRelease(release.id);
     assert.equal(reloaded?.assets[0]?.sha256, "a".repeat(64));
     assert.equal(reloaded?.findings[0]?.code, "DEMO");
-    assert.equal(reloaded?.actions[0]?.idempotencyKey, `${release.id}:submit:v1:YOUTUBE`);
+    assert.equal(reloaded?.actions.find(({ id }) => id === action.id)?.idempotencyKey, `${release.id}:submit:v1:YOUTUBE`);
     assert.equal(reloaded?.approvals[0]?.decision, "APPROVED");
     assert.equal(reloaded?.deliveries[0]?.status, "SUBMITTING");
     assert.equal((await repository.listAudit({ releaseId: release.id }))[0]?.actor, "test");
     assert.deepEqual((await repository.listReleases([project.id])).map(({ id }) => id), [release.id]);
     const projectAudit = await repository.listAudit({ projectIds: [project.id] });
-    assert.equal(projectAudit.length, 5);
+    assert.equal(projectAudit.length, 6);
     assert.equal(projectAudit.every(({ releaseId }) => releaseId === release.id), true);
     assert.deepEqual((await repository.listWorkflowRuns(release.id))[0]?.checkpoint, { actionId: action.id });
   } finally {

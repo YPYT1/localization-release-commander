@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { BadRequestException, Inject, Injectable, Optional, ServiceUnavailableException } from "@nestjs/common";
 import type { AssetKind } from "@lrc/contracts";
-import { validateSrt } from "@lrc/qc";
+import { checkRightsWindow, validateSrt } from "@lrc/qc";
 
 const STRUCTURED_TEXT_LIMIT = 10 * 1024 * 1024;
 const FFPROBE_MAX_BUFFER = 4 * 1024 * 1024;
@@ -42,6 +42,7 @@ export interface AssetInspectionInput {
   path: string;
   kind: AssetKind;
   fileName: string;
+  subtitleFormat?: "SRT" | "TTML";
   language?: string;
   sizeBytes: number;
   reportedContentType?: string;
@@ -121,17 +122,19 @@ export class AssetInspectionService {
   async inspect(input: AssetInspectionInput): Promise<Record<string, unknown>> {
     const common = {
       sizeBytes: input.sizeBytes,
-      contentType: safeContentType(input.kind, input.reportedContentType),
+      contentType: safeContentType(input.kind, input.reportedContentType, input.subtitleFormat),
     };
     if (input.kind === "VIDEO" || input.kind === "AUDIO") {
       return { ...common, media: await this.ffprobe.inspect(input.path, input.kind) };
     }
     if (input.kind === "SUBTITLE") {
+      if (input.subtitleFormat === "TTML") return { ...common, subtitle: { format: "TTML" } };
       const text = await this.readStructuredText(input);
       const validation = validateSrt(text, { language: input.language ?? "und" });
       return {
         ...common,
         subtitle: {
+          format: "SRT",
           valid: validation.valid,
           cueCount: validation.cues.length,
           durationMs: validation.cues.at(-1)?.endMs ?? 0,
@@ -201,24 +204,27 @@ function normalizeStream(stream: Record<string, unknown>, fallbackIndex: number)
 }
 
 function rightsMetadata(document: Record<string, unknown>): Record<string, unknown> {
-  const status = document.status;
-  if (status !== "VALID" && status !== "EXPIRING" && status !== "EXPIRED" && status !== "UNKNOWN") {
-    throw new BadRequestException("RIGHTS status must be VALID, EXPIRING, EXPIRED, or UNKNOWN");
+  if (Object.keys(document).some((field) => field !== "validFrom" && field !== "validUntil")) {
+    throw new BadRequestException("RIGHTS only accepts validFrom and validUntil");
   }
-  for (const field of ["validFrom", "validUntil"] as const) {
-    const value = document[field];
-    if (value !== undefined && (typeof value !== "string" || Number.isNaN(Date.parse(value)))) {
-      throw new BadRequestException(`RIGHTS ${field} must be an ISO date-time`);
-    }
+  if (typeof document.validFrom !== "string" || typeof document.validUntil !== "string") {
+    throw new BadRequestException("RIGHTS validFrom and validUntil are required");
   }
-  return {
-    status,
-    ...(typeof document.validFrom === "string" ? { validFrom: document.validFrom } : {}),
-    ...(typeof document.validUntil === "string" ? { validUntil: document.validUntil } : {}),
-  };
+  try {
+    checkRightsWindow({
+      territory: "inspection",
+      validFrom: document.validFrom,
+      validUntil: document.validUntil,
+      evaluationAt: document.validFrom,
+      warningWindowHours: 0,
+    });
+  } catch (error) {
+    throw new BadRequestException(error instanceof Error ? `RIGHTS ${error.message}` : "RIGHTS window is invalid");
+  }
+  return { validFrom: document.validFrom, validUntil: document.validUntil };
 }
 
-function safeContentType(kind: AssetKind, reported?: string): string {
+function safeContentType(kind: AssetKind, reported?: string, subtitleFormat?: "SRT" | "TTML"): string {
   const allowlists: Partial<Record<AssetKind, readonly string[]>> = {
     VIDEO: ["video/mp4", "video/webm", "video/quicktime"],
     AUDIO: ["audio/mpeg", "audio/mp4", "audio/wav", "audio/x-wav", "audio/flac", "audio/ogg"],
@@ -226,7 +232,7 @@ function safeContentType(kind: AssetKind, reported?: string): string {
     DELIVERY_PACKAGE: ["application/zip"],
   };
   if (reported && allowlists[kind]?.includes(reported)) return reported;
-  if (kind === "SUBTITLE") return "application/x-subrip";
+  if (kind === "SUBTITLE") return subtitleFormat === "TTML" ? "application/ttml+xml" : "application/x-subrip";
   if (kind === "RIGHTS" || kind === "METADATA") return "application/json";
   return "application/octet-stream";
 }

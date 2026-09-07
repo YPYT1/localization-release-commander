@@ -24,6 +24,7 @@ interface UploadedAssetFile {
 
 interface PersistAssetInput {
   kind: AssetKind;
+  subtitleFormat?: "SRT" | "TTML";
   language?: string;
   fileName: string;
   metadata?: Record<string, unknown>;
@@ -83,6 +84,7 @@ export class AssetService {
     releaseId: string,
     input: Omit<PersistAssetInput, "reportedContentType"> & { content: string | Buffer; parentAssetId: string },
     principal: AuthPrincipal,
+    actionId: string,
   ): Promise<AssetDto> {
     const release = await this.access.requireReleaseRecord(principal, releaseId);
     this.assertAssetsMutable(release);
@@ -90,7 +92,7 @@ export class AssetService {
     if (!parent || parent.releaseId !== releaseId) throw new BadRequestException("parentAssetId must reference an asset in this release");
     const fileName = this.fileName(input.fileName);
     const stored = await this.storage.storeContent(input.content);
-    return this.persist(releaseId, { ...input, fileName }, stored, principal);
+    return this.persist(releaseId, { ...input, fileName }, stored, principal, actionId);
   }
 
   async openAuthorized(assetId: string, principal: AuthPrincipal) {
@@ -104,12 +106,19 @@ export class AssetService {
     };
   }
 
-  private async persist(releaseId: string, input: PersistAssetInput, stored: StoredAssetObject, principal: AuthPrincipal): Promise<AssetDto> {
+  private async persist(
+    releaseId: string,
+    input: PersistAssetInput,
+    stored: StoredAssetObject,
+    principal: AuthPrincipal,
+    actionId?: string,
+  ): Promise<AssetDto> {
     let inspection: Record<string, unknown>;
     try {
       inspection = await this.inspection.inspect({
         path: stored.path,
         kind: input.kind,
+        subtitleFormat: input.subtitleFormat,
         fileName: input.fileName,
         language: input.language,
         sizeBytes: stored.sizeBytes,
@@ -135,7 +144,7 @@ export class AssetService {
           originalFileName: input.fileName,
           ...inspection,
         },
-      }, { actor: principal.id, sizeBytes: stored.sizeBytes });
+      }, { actor: principal.id, sizeBytes: stored.sizeBytes, ...(actionId ? { actionId } : {}) });
     } catch (error) {
       if (!(error instanceof AssetRegistrationUncertainError)) await this.storage.remove(stored.uri);
       throw error;
@@ -143,6 +152,10 @@ export class AssetService {
     if (result.outcome === "not_mutable") {
       await this.storage.remove(stored.uri);
       throw new ConflictException(`Assets cannot be changed while release is ${result.state}`);
+    }
+    if (result.outcome === "action_running") {
+      await this.storage.remove(stored.uri);
+      throw new ConflictException("Assets cannot be changed while an action is running");
     }
     if (result.outcome === "existing") {
       await this.storage.remove(stored.uri);
@@ -175,6 +188,7 @@ export class AssetService {
   private contentType(value: unknown): string {
     const safe = new Set([
       "application/json", "application/octet-stream", "application/x-subrip", "application/zip",
+      "application/ttml+xml",
       "audio/flac", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav",
       "image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime", "video/webm",
     ]);

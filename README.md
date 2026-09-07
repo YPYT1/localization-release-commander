@@ -31,7 +31,7 @@ Localization Release Commander 将这些步骤绑定到同一条 Release 时间�
 | 资产 | 工作台单文件上传、同源流式 BFF、NestJS multipart 接收、服务端 SHA-256、随机对象名、同卷原子落盘、大小限制、去重、授权下载和失败清理 |
 | 媒体检查 | `ffprobe` 参数数组调用、超时与输出限制；校验 VIDEO/AUDIO 所需轨道并归一化格式、时长、码率和流信息 |
 | 确定性 QC | SRT BOM/CRLF 解析与序列化、CPS、重叠、空字幕、媒体末尾、可逆时间修复与 diff、SRT→TTML、版权窗口检查 |
-| 审批与交付 | R2 单人、R3 双主体审批；审批与动作/输入版本绑定；Delivery 原子 claim、幂等提交、失败恢复和审计 |
+| 审批与交付 | R2 单人、R3 双主体审批；审批决定与 Action/Release 状态在同一事务内提交；Delivery 原子 claim、幂等提交、provider 回执本地收尾恢复和审计 |
 | PostgreSQL | Project、Release、Asset、Finding、Action、Approval、Delivery、Audit、Workflow Run 持久化；迁移、约束、索引和不可更新/删除的审计触发器 |
 | LangGraph Worker | A1–A7 流程：校验、自动修复、人工修复、版权门禁、TTML 打包、审批、超时恢复、平台 QC 回流；提供确定性平台模拟器 |
 | 工程验证 | Node 原生测试、workspace typecheck/build/lint，以及 GitHub Actions 上的 install → lint → typecheck → test → build |
@@ -192,7 +192,9 @@ pnpm --filter @lrc/api test
 - API 不信任客户端传入的 actor、角色、项目范围、资产 URI 或 SHA-256；这些值由 JWT、Repository 和服务端存储计算得出。
 - JWT 校验签名、签发方、受众、时间边界、角色白名单和 Project UUID；每次资源访问再次执行项目隔离。
 - 原始资产保持不可变；修复生成新对象和父子关系。存储 URI 使用固定 `asset://` 语法并阻止目录穿越和符号链接替换。
-- 高风险动作必须审批；同一主体不能为 R3 动作提供两次批准。外部调用使用幂等键和原子 claim。
+- 高风险动作必须审批；同一主体不能为 R3 动作提供两次批准。审批决定、Action 状态和 Release 状态在一个仓储事务中线性化，拒绝不会被并发批准覆盖。
+- 同一 Release 的 API 校验/运行通过原子 workflow claim 串行；失败回滚以 Release `version` 比较并更新，旧流程不能覆盖后续状态。
+- Delivery 在 provider 已确认而 `SUBMITTED` 落库失败时，先保存 provider 回执为可重试恢复记录；下一次提交只完成本地收尾，不重复调用 provider。
 - PostgreSQL 审计事件只追加，数据库触发器拒绝更新和删除。
 - token、Cookie、完整合同和真实平台凭证不进入模型上下文或浏览器 DTO。
 
@@ -204,10 +206,10 @@ pnpm --filter @lrc/api test
 
 - Redis/BullMQ 尚未接入，API 内的长流程还没有真正转移到独立 Worker 队列。
 - LangGraph checkpoint 目前由调用方传入/返回；API 的 `workflow_runs` 与 Worker 尚未使用同一个持久化 checkpointer 和一致状态流。
-- API 的 QC 编排尚未完全由已锁定 RuleSet 和上传检查结果驱动；缺失 RIGHTS 的 UNKNOWN 门禁、完整 TTML/修复资产流仍需收口。
+- API QC 已由锁定 RuleSet 和不可变资产字节驱动；缺失/损坏 RIGHTS、SRT 修复和 OTT TTML 派生资产均有确定性门禁与回归测试。
 - 平台 Adapter 是确定性模拟器，尚未接入真实 YouTube/OTT provider、webhook、凭证轮换和限流策略。
 - 工作台尚未完成 Release 搜索、状态/平台筛选、上传进度显示、断点续传和全部稳定错误码。
-- Action/Approval/Delivery 已有幂等与 claim 基础，但事务一致性、租约恢复与 outbox 尚未形成完整并发故障闭环。
+- Action/Approval/Delivery 已有幂等、原子 claim、提交前复验和本地收尾恢复；租约超时、transactional outbox 仍是后续生产化工作。
 - 100 包评测集、离线回放、质量指标和真实端到端验收证据尚未完成。
 - OpenTelemetry、指标/追踪/告警、数据库 readiness、独立 CORS frontend origin、容器镜像和完整部署流水线尚未落地。
 - LLM 规范解释、Finding 聚类和文案辅助尚未接入；当前系统刻意保持确定性且不依赖模型。

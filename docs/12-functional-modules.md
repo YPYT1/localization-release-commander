@@ -26,9 +26,9 @@ Agent 可以提出修复计划，用户查看 diff 后执行。自动修复只�
 
 ## 5. 版权与地区
 
-用户维护作品、音乐、演员和素材的地区/时间权利。系统在目标发布日期计算权利状态：`VALID`、`EXPIRING`、`EXPIRED`、`UNKNOWN`。
+用户维护作品、音乐、演员和素材的地区/时间权利。系统在目标发布日期计算权利状态：`VALID`、`EXPIRING_SOON`、`EXPIRED`、`NOT_STARTED`、`UNKNOWN`。
 
-验收：`EXPIRED` 阻断发布；`EXPIRING` 创建审批；`UNKNOWN` 不得被模型默认为有效。
+验收：`EXPIRED`/`NOT_STARTED` 阻断发布；`EXPIRING_SOON` 创建 R3 审批；`UNKNOWN` 不得被模型默认为有效。
 
 ## 6. 审批中心
 

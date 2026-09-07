@@ -13,8 +13,12 @@ import type { AuthPrincipal } from "./auth/auth.js";
 import { signTestToken } from "./auth/testing.js";
 import { FFPROBE_RUNNER, type CommandRunner } from "./storage/media-inspection.service.js";
 import { configureHttpBodyParsing } from "./http-configuration.js";
+import { ORCHESTRATION_CLOCK } from "./workflow/orchestration.js";
 
 const TEST_AUTH_SECRET = "lrc-test-secret-is-at-least-thirty-two-bytes-long";
+const TEST_EVALUATION_AT = "2026-09-04T00:00:00.000Z";
+const VALID_SRT = "1\n00:00:00,000 --> 00:00:01,000\nHello\n";
+const VALID_RIGHTS = JSON.stringify({ validFrom: "2026-01-01T00:00:00.000Z", validUntil: "2026-12-31T00:00:00.000Z" });
 const ADMIN: AuthPrincipal = { id: "admin", roles: ["Admin"], projectIds: [] };
 process.env.NODE_ENV = "test";
 process.env.AUTH_JWT_SECRET = TEST_AUTH_SECRET;
@@ -41,7 +45,7 @@ function fetch(input: string | URL, init: RequestInit = {}, principal: AuthPrinc
 
 async function withApi(
   run: (baseUrl: string, storageDir: string) => Promise<void>,
-  environment: { demoAuthEnabled?: boolean; nodeEnv?: string } = {},
+  environment: { demoAuthEnabled?: boolean; nodeEnv?: string; clock?: () => string } = {},
 ): Promise<void> {
   const previousDemoAuth = process.env.DEMO_AUTH_ENABLED;
   const previousNodeEnv = process.env.NODE_ENV;
@@ -54,6 +58,8 @@ async function withApi(
   const testingModule = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(FFPROBE_RUNNER)
     .useValue(TEST_FFPROBE_RUNNER)
+    .overrideProvider(ORCHESTRATION_CLOCK)
+    .useValue(environment.clock ?? (() => TEST_EVALUATION_AT))
     .compile();
   const app: INestApplication = testingModule.createNestApplication({ logger: false, bodyParser: false });
   configureHttpBodyParsing(app);
@@ -72,6 +78,45 @@ async function withApi(
     if (previousStorageDir === undefined) delete process.env.ASSET_STORAGE_DIR;
     else process.env.ASSET_STORAGE_DIR = previousStorageDir;
   }
+}
+
+async function createYoutubeFixture(baseUrl: string, input: {
+  episode: string;
+  language?: "en" | "ja";
+  ruleSetId?: "youtube-en-v1" | "youtube-ja-v1";
+  subtitle?: string;
+  rights?: string;
+}): Promise<{ release: ReleaseDetailDto; assets: AssetDto[] }> {
+  const language = input.language ?? "en";
+  const releaseResponse = await fetch(`${baseUrl}/releases`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      projectName: `Fixture ${input.episode}`,
+      ruleSetId: input.ruleSetId ?? "youtube-en-v1",
+      episode: input.episode,
+      territory: language === "ja" ? "JP" : "US",
+      platform: "YOUTUBE",
+      language,
+    }),
+  });
+  assert.equal(releaseResponse.status, 201);
+  const release = (await releaseResponse.json()) as ReleaseDetailDto;
+  const assets: AssetDto[] = [];
+  for (const asset of [
+    { kind: "VIDEO", fileName: `${input.episode}.mp4`, content: "video" },
+    { kind: "SUBTITLE", language, fileName: `${input.episode}.srt`, content: input.subtitle ?? VALID_SRT },
+    { kind: "RIGHTS", fileName: `${input.episode}-rights.json`, content: input.rights ?? VALID_RIGHTS },
+  ]) {
+    const response = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(asset),
+    });
+    assert.equal(response.status, 201);
+    assets.push((await response.json()) as AssetDto);
+  }
+  return { release, assets };
 }
 
 test("enabled non-production demo login issues an authenticated fixed persona", async () => {
@@ -176,7 +221,7 @@ test("R3 requires two signed approvers and ignores spoofed actor headers", async
     const releaseResponse = await fetch(`${baseUrl}/releases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectName: "Rights Studio", ruleSetId: "ott-en-v1", episode: "R3", territory: "US", platform: "OTT", language: "en" }),
+      body: JSON.stringify({ projectName: "Rights Studio", ruleSetId: "youtube-en-v1", episode: "R3", territory: "US", platform: "YOUTUBE", language: "en" }),
     });
     const release = (await releaseResponse.json()) as ReleaseDetailDto;
     const operator: AuthPrincipal = { id: "operator-r3", roles: ["Operator"], projectIds: [release.projectId] };
@@ -187,8 +232,8 @@ test("R3 requires two signed approvers and ignores spoofed actor headers", async
 
     for (const asset of [
       { kind: "VIDEO", fileName: "r3.mp4", content: "r3-video" },
-      { kind: "SUBTITLE", language: "en", fileName: "r3.srt", content: "r3-subtitle" },
-      { kind: "RIGHTS", fileName: "rights.json", content: JSON.stringify({ status: "EXPIRING" }) },
+      { kind: "SUBTITLE", language: "en", fileName: "r3.srt", content: VALID_SRT },
+      { kind: "RIGHTS", fileName: "rights.json", content: JSON.stringify({ validFrom: "2026-01-01T00:00:00.000Z", validUntil: "2026-09-07T00:00:00.000Z" }) },
     ]) {
       assert.equal((await fetch(`${baseUrl}/releases/${release.id}/assets`, {
         method: "POST",
@@ -199,6 +244,7 @@ test("R3 requires two signed approvers and ignores spoofed actor headers", async
 
     const run = (await (await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" }, operator)).json()) as WorkflowResultDto;
     assert.equal(run.action?.risk, "R3");
+    assert.deepEqual(run.findings.map(({ code, severity }) => ({ code, severity })), [{ code: "RIGHTS_EXPIRING_SOON", severity: "WARNING" }]);
     const delivery = ((await (await fetch(`${baseUrl}/releases/${release.id}`, {}, operator)).json()) as ReleaseDetailDto).deliveries[0]!;
 
     assert.equal((await fetch(`${baseUrl}/actions/${run.action?.id}/approve`, {
@@ -376,7 +422,7 @@ test("multipart upload persists, inspects, and serves exact subtitle bytes withi
     assert.equal(asset.metadata.originalFileName, "episode-12.srt");
     assert.equal(asset.metadata.contentType, "application/x-subrip");
     assert.equal(asset.metadata.parentAssetId, undefined);
-    assert.deepEqual(asset.metadata.subtitle, { valid: true, cueCount: 1, durationMs: 1000, findings: [] });
+    assert.deepEqual(asset.metadata.subtitle, { format: "SRT", valid: true, cueCount: 1, durationMs: 1000, findings: [] });
 
     const download = await fetch(`${baseUrl}/assets/${asset.id}/content`);
     assert.equal(download.status, 200);
@@ -439,6 +485,13 @@ test("asset endpoints reject claimed locations and remove files that fail server
     });
     assert.equal(invalid.status, 400);
 
+    const claimedStatus = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "RIGHTS", fileName: "status-only.json", content: JSON.stringify({ status: "VALID" }) }),
+    });
+    assert.equal(claimedStatus.status, 400);
+
     const invalidUtf8 = new FormData();
     invalidUtf8.set("kind", "METADATA");
     invalidUtf8.set("file", new Blob([Uint8Array.of(0xff, 0xfe)], { type: "application/json" }), "metadata.json");
@@ -478,9 +531,22 @@ test("read models expose findings, timeline, audit, rules, settings, and dashboa
     const dashboard = (await (await fetch(`${baseUrl}/dashboard`)).json()) as { totalReleases: number; draftReleases: number };
     assert.deepEqual(dashboard, { totalReleases: 1, draftReleases: 1, blockedReleases: 0, awaitingApproval: 0, completedReleases: 0 });
 
-    const rules = (await (await fetch(`${baseUrl}/rulesets`)).json()) as Array<{ status: string; checks: number }>;
+    const rules = (await (await fetch(`${baseUrl}/rulesets`)).json()) as Array<{ id: string; status: string; checks: number; cpsLimit: number; subtitleFormat: string; rightsWarningWindowHours: number }>;
     assert.equal(rules.length, 6);
     assert.equal(rules.every(({ status, checks }) => status === "PUBLISHED" && checks > 0), true);
+    assert.deepEqual(rules.find(({ id }) => id === "ott-ja-v1"), {
+      id: "ott-ja-v1",
+      name: "OTT Japanese Delivery",
+      version: "1.0.0",
+      platform: "OTT",
+      language: "ja",
+      cpsLimit: 15,
+      subtitleFormat: "TTML",
+      rightsWarningWindowHours: 72,
+      status: "PUBLISHED",
+      checks: 10,
+      updatedAt: "2026-09-04T00:00:00.000Z",
+    });
 
     const settings = (await (await fetch(`${baseUrl}/settings`)).json()) as { retentionDays: number; connections: Array<Record<string, unknown>> };
     assert.equal(settings.retentionDays, 730);
@@ -498,7 +564,8 @@ test("a valid release requires approval before one idempotent delivery submissio
     const release = (await releaseResponse.json()) as ReleaseSummaryDto;
     for (const asset of [
       { kind: "VIDEO", fileName: "episode-8.mp4", content: "video" },
-      { kind: "SUBTITLE", language: "en", fileName: "episode-8.srt", content: "subtitle" },
+      { kind: "SUBTITLE", language: "en", fileName: "episode-8.srt", content: VALID_SRT },
+      { kind: "RIGHTS", fileName: "rights.json", content: VALID_RIGHTS },
     ]) {
       await fetch(`${baseUrl}/releases/${release.id}/assets`, {
         method: "POST",
@@ -512,10 +579,15 @@ test("a valid release requires approval before one idempotent delivery submissio
     const run = (await runResponse.json()) as WorkflowResultDto;
     assert.equal(run.state, "READY_FOR_APPROVAL");
     assert.equal(run.action?.risk, "R2");
+    assert.match(String(run.action?.input.manifestVersion), /^youtube-en-v1:[0-9a-f]{16}$/);
 
     const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
     const delivery = detail.deliveries[0];
     assert.equal(delivery?.status, "PENDING");
+    const audit = (await (await fetch(`${baseUrl}/audit?releaseId=${release.id}`)).json()) as Array<{ type: string; payload: Record<string, unknown> }>;
+    const validationAudit = audit.find(({ type }) => type === "validation.completed");
+    assert.equal(validationAudit?.payload.ruleSetId, "youtube-en-v1");
+    assert.equal(validationAudit?.payload.ruleSetVersion, "1.0.0");
 
     const staleManifestAttempt = await fetch(`${baseUrl}/releases/${release.id}/assets`, {
       method: "POST",
@@ -555,12 +627,13 @@ test("a repair action is executable and a rejected submission remains blocked", 
     const releaseResponse = await fetch(`${baseUrl}/releases`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectName: "Northwind Shorts", ruleSetId: "ott-ja-v1", episode: "Episode 9", territory: "JP", platform: "OTT", language: "ja" }),
+      body: JSON.stringify({ projectName: "Northwind Shorts", ruleSetId: "youtube-ja-v1", episode: "Episode 9", territory: "JP", platform: "YOUTUBE", language: "ja" }),
     });
     const release = (await releaseResponse.json()) as ReleaseSummaryDto;
     for (const asset of [
       { kind: "VIDEO", fileName: "episode-9.mp4", content: "video" },
-      { kind: "SUBTITLE", language: "ja", fileName: "episode-9.srt", content: "1\n00:00:00,000 --> 00:00:00,500\n1234567890\n", metadata: { cpsExceeded: true } },
+      { kind: "SUBTITLE", language: "ja", fileName: "episode-9.srt", content: "1\n00:00:00,000 --> 00:00:00,500\n1234567890\n" },
+      { kind: "RIGHTS", fileName: "rights.json", content: VALID_RIGHTS },
     ]) {
       await fetch(`${baseUrl}/releases/${release.id}/assets`, {
         method: "POST",
@@ -572,6 +645,7 @@ test("a repair action is executable and a rejected submission remains blocked", 
     const repairRun = (await (await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" })).json()) as WorkflowResultDto;
     assert.equal(repairRun.state, "REMEDIATING");
     assert.equal(repairRun.action?.risk, "R1");
+    assert.equal(repairRun.findings.find(({ code }) => code === "SUBTITLE_CPS_EXCEEDED")?.evidence?.limit, 15);
 
     const executedResponse = await fetch(`${baseUrl}/actions/${repairRun.action?.id}/execute`, { method: "POST" });
     assert.equal(executedResponse.status, 201);
@@ -586,6 +660,8 @@ test("a repair action is executable and a rejected submission remains blocked", 
     const repairedContent = await fetch(`${baseUrl}/assets/${repaired.id}/content`);
     assert.equal(repairedContent.status, 200);
     assert.notEqual(await repairedContent.text(), "1\n00:00:00,000 --> 00:00:00,500\n1234567890\n");
+    const originalContent = await fetch(`${baseUrl}/assets/${subtitles[0]!.id}/content`);
+    assert.equal(await originalContent.text(), "1\n00:00:00,000 --> 00:00:00,500\n1234567890\n");
     const submitAction = detail.actions.find(({ type }) => type === "SUBMIT_DELIVERY");
     assert.equal(submitAction?.status, "PENDING_APPROVAL");
 
@@ -614,6 +690,192 @@ test("validation blocks a release with missing required assets", async () => {
     assert.equal(validationResponse.status, 201);
     const validation = (await validationResponse.json()) as WorkflowResultDto;
     assert.equal(validation.state, "BLOCKED");
-    assert.deepEqual(validation.findings.map(({ code }) => code).sort(), ["SUBTITLE_REQUIRED", "VIDEO_REQUIRED"]);
+    assert.deepEqual(validation.findings.map(({ code }) => code).sort(), ["RIGHTS_UNKNOWN", "SUBTITLE_REQUIRED", "VIDEO_REQUIRED"]);
   });
+});
+
+test("validation reports missing, not-started, and expired rights from stored documents", async () => {
+  await withApi(async (baseUrl) => {
+    const createRelease = async (episode: string) => (await (await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: `Rights ${episode}`, ruleSetId: "youtube-en-v1", episode, territory: "US", platform: "YOUTUBE", language: "en" }),
+    })).json()) as ReleaseDetailDto;
+    const add = (releaseId: string, asset: Record<string, unknown>) => fetch(`${baseUrl}/releases/${releaseId}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(asset),
+    });
+
+    const missing = await createRelease("Missing");
+    await add(missing.id, { kind: "VIDEO", fileName: "missing.mp4", content: "video" });
+    await add(missing.id, { kind: "SUBTITLE", language: "en", fileName: "missing.srt", content: VALID_SRT });
+    const missingValidation = (await (await fetch(`${baseUrl}/releases/${missing.id}/validate`, { method: "POST" })).json()) as WorkflowResultDto;
+    assert.deepEqual(missingValidation.findings.map(({ code }) => code), ["RIGHTS_UNKNOWN"]);
+
+    for (const [episode, window, expected] of [
+      ["Not Started", { validFrom: "2026-09-05T00:00:00.000Z", validUntil: "2026-12-31T00:00:00.000Z" }, "RIGHTS_NOT_STARTED"],
+      ["Expired", { validFrom: "2026-01-01T00:00:00.000Z", validUntil: TEST_EVALUATION_AT }, "RIGHTS_EXPIRED"],
+    ] as const) {
+      const release = await createRelease(episode);
+      await add(release.id, { kind: "VIDEO", fileName: `${episode}.mp4`, content: "video" });
+      await add(release.id, { kind: "SUBTITLE", language: "en", fileName: `${episode}.srt`, content: VALID_SRT });
+      await add(release.id, { kind: "RIGHTS", fileName: `${episode}.json`, content: JSON.stringify(window) });
+      const validation = (await (await fetch(`${baseUrl}/releases/${release.id}/validate`, { method: "POST" })).json()) as WorkflowResultDto;
+      assert.equal(validation.state, "BLOCKED");
+      assert.deepEqual(validation.findings.map(({ code }) => code), [expected]);
+    }
+  });
+});
+
+test("OTT generates one downloadable TTML child for the latest valid SRT", async () => {
+  await withApi(async (baseUrl) => {
+    const release = (await (await fetch(`${baseUrl}/releases`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectName: "OTT Studio", ruleSetId: "ott-en-v1", episode: "OTT 1", territory: "US", platform: "OTT", language: "en" }),
+    })).json()) as ReleaseDetailDto;
+    const assets: AssetDto[] = [];
+    for (const asset of [
+      { kind: "VIDEO", fileName: "ott.mp4", content: "video" },
+      { kind: "SUBTITLE", language: "en", fileName: "ott.srt", content: VALID_SRT },
+      { kind: "RIGHTS", fileName: "rights.json", content: VALID_RIGHTS },
+    ]) {
+      assets.push((await (await fetch(`${baseUrl}/releases/${release.id}/assets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(asset),
+      })).json()) as AssetDto);
+    }
+    const source = assets.find(({ kind }) => kind === "SUBTITLE")!;
+
+    const validation = (await (await fetch(`${baseUrl}/releases/${release.id}/validate`, { method: "POST" })).json()) as WorkflowResultDto;
+    assert.equal(validation.state, "BLOCKED");
+    assert.deepEqual(validation.findings.map(({ code, suggestedAction }) => ({ code, suggestedAction })), [
+      { code: "TTML_REQUIRED", suggestedAction: "GENERATE_TTML" },
+    ]);
+
+    const run = (await (await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" })).json()) as WorkflowResultDto;
+    assert.equal(run.state, "REMEDIATING");
+    assert.equal(run.action?.type, "GENERATE_TTML");
+    assert.equal(run.action?.risk, "R1");
+    assert.equal(run.action?.input.assetId, source.id);
+
+    const executed = await fetch(`${baseUrl}/actions/${run.action?.id}/execute`, { method: "POST" });
+    assert.equal(executed.status, 201);
+    assert.equal(((await executed.json()) as ActionDto).status, "COMPLETED");
+    assert.equal((await fetch(`${baseUrl}/actions/${run.action?.id}/execute`, { method: "POST" })).status, 201);
+
+    const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    const ttml = detail.assets.find((asset) => asset.parentAssetId === source.id && (asset.metadata.subtitle as { format?: string })?.format === "TTML");
+    assert.ok(ttml);
+    assert.equal(detail.assets.filter(({ kind }) => kind === "SUBTITLE").length, 2);
+    assert.equal(detail.actions.find(({ type }) => type === "SUBMIT_DELIVERY")?.status, "PENDING_APPROVAL");
+
+    const download = await fetch(`${baseUrl}/assets/${ttml.id}/content`);
+    assert.equal(download.status, 200);
+    assert.match(download.headers.get("content-type") ?? "", /^application\/ttml\+xml/);
+    const content = await download.text();
+    assert.match(content, /<tt xmlns=/);
+    assert.match(content, /<p xml:id="cue-1" begin="00:00:00\.000" end="00:00:01\.000">Hello<\/p>/);
+  });
+});
+
+test("concurrent execution claims one R1 action and creates one derived asset", async () => {
+  await withApi(async (baseUrl) => {
+    const { release, assets } = await createYoutubeFixture(baseUrl, {
+      episode: "Concurrent Repair",
+      language: "ja",
+      ruleSetId: "youtube-ja-v1",
+      subtitle: "1\n00:00:00,000 --> 00:00:00,500\n1234567890\n",
+    });
+    const source = assets.find(({ kind }) => kind === "SUBTITLE")!;
+    const run = (await (await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" })).json()) as WorkflowResultDto;
+    assert.equal(run.action?.type, "REPAIR_SUBTITLE");
+
+    const responses = await Promise.all([
+      fetch(`${baseUrl}/actions/${run.action!.id}/execute`, { method: "POST" }),
+      fetch(`${baseUrl}/actions/${run.action!.id}/execute`, { method: "POST" }),
+    ]);
+    assert.equal(responses.some(({ status }) => status === 201), true);
+    assert.equal(responses.every(({ status }) => status === 201 || status === 409), true);
+
+    const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.equal(detail.assets.filter(({ parentAssetId }) => parentAssetId === source.id).length, 1);
+    assert.equal(detail.actions.filter(({ type }) => type === "REPAIR_SUBTITLE").length, 1);
+    const audit = (await (await fetch(`${baseUrl}/audit?releaseId=${release.id}`)).json()) as Array<{ type: string; payload: Record<string, unknown> }>;
+    assert.equal(audit.filter(({ type, payload }) => type === "action.started" && payload.actionId === run.action!.id).length, 1);
+  });
+});
+
+test("concurrent release runs keep one submission action and one delivery", async () => {
+  await withApi(async (baseUrl) => {
+    const { release } = await createYoutubeFixture(baseUrl, { episode: "Concurrent Submission" });
+    const responses = await Promise.all([
+      fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" }),
+      fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" }),
+    ]);
+    assert.equal(responses.some(({ status }) => status === 201), true);
+    assert.equal(responses.every(({ status }) => status === 201 || status === 409), true);
+
+    const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.equal(detail.actions.filter(({ type }) => type === "SUBMIT_DELIVERY").length, 1);
+    assert.equal(detail.deliveries.length, 1);
+    const audit = (await (await fetch(`${baseUrl}/audit?releaseId=${release.id}`)).json()) as Array<{ type: string }>;
+    assert.equal(audit.filter(({ type }) => type === "approval.requested").length, 1);
+  });
+});
+
+test("an approved R2 submission is replaced by R3 after rights enter the 72-hour window", async () => {
+  let now = TEST_EVALUATION_AT;
+  await withApi(async (baseUrl) => {
+    const rights = JSON.stringify({ validFrom: "2026-01-01T00:00:00.000Z", validUntil: "2026-09-10T00:00:00.000Z" });
+    const { release } = await createYoutubeFixture(baseUrl, { episode: "Risk Escalation", rights });
+    const initialRun = (await (await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" })).json()) as WorkflowResultDto;
+    assert.equal(initialRun.action?.risk, "R2");
+    const initialDetail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    const initialDelivery = initialDetail.deliveries[0]!;
+    assert.equal((await fetch(`${baseUrl}/actions/${initialRun.action!.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Initial rights window reviewed" }),
+    })).status, 201);
+
+    now = "2026-09-08T00:00:00.000Z";
+    assert.equal((await fetch(`${baseUrl}/deliveries/${initialDelivery.id}/submit`, { method: "POST" })).status, 409);
+    const rerun = (await (await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" })).json()) as WorkflowResultDto;
+    assert.equal(rerun.action?.risk, "R3");
+    assert.notEqual(rerun.action?.id, initialRun.action?.id);
+    const current = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.equal(current.actions.filter(({ type }) => type === "SUBMIT_DELIVERY").length, 2);
+    assert.equal(current.actions.find(({ id }) => id === initialRun.action?.id)?.status, "REJECTED");
+    assert.equal(current.deliveries.length, 2);
+  }, { clock: () => now });
+});
+
+test("submission revalidation blocks an approved release after rights expire", async () => {
+  let now = TEST_EVALUATION_AT;
+  await withApi(async (baseUrl) => {
+    const rights = JSON.stringify({ validFrom: "2026-01-01T00:00:00.000Z", validUntil: "2026-09-10T00:00:00.000Z" });
+    const { release } = await createYoutubeFixture(baseUrl, { episode: "Expired Before Submit", rights });
+    const run = (await (await fetch(`${baseUrl}/releases/${release.id}/run`, { method: "POST" })).json()) as WorkflowResultDto;
+    const detail = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    const delivery = detail.deliveries[0]!;
+    assert.equal((await fetch(`${baseUrl}/actions/${run.action!.id}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Rights were valid at approval" }),
+    })).status, 201);
+
+    now = "2026-09-10T00:00:00.000Z";
+    assert.equal((await fetch(`${baseUrl}/deliveries/${delivery.id}/submit`, { method: "POST" })).status, 409);
+    const blocked = (await (await fetch(`${baseUrl}/releases/${release.id}`)).json()) as ReleaseDetailDto;
+    assert.equal(blocked.state, "BLOCKED");
+    assert.equal(blocked.findings.some(({ code }) => code === "RIGHTS_EXPIRED"), true);
+    assert.equal(blocked.actions.find(({ id }) => id === run.action?.id)?.status, "REJECTED");
+    assert.equal(blocked.deliveries.find(({ id }) => id === delivery.id)?.status, "PENDING");
+    const audit = (await (await fetch(`${baseUrl}/audit?releaseId=${release.id}`)).json()) as Array<{ type: string; payload: Record<string, unknown> }>;
+    assert.equal(audit.some(({ type, payload }) => type === "delivery.preflight_rejected" && payload.reason === "VALIDATION_BLOCKED"), true);
+    assert.equal(audit.some(({ type, payload }) => type === "validation.completed" && payload.ruleSetVersion === "1.0.0"), true);
+  }, { clock: () => now });
 });
