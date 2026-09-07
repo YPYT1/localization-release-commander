@@ -31,8 +31,12 @@ export interface WorkflowRunRecord {
   id: string;
   releaseId: string;
   graphVersion: string;
+  type?: "EVALUATE_RELEASE";
   checkpoint: Record<string, unknown>;
   status: "RUNNING" | "WAITING" | "COMPLETED" | "FAILED";
+  attempt: number;
+  leaseOwner?: string;
+  leaseExpiresAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -194,6 +198,8 @@ export interface ReleaseRepository {
   listAudit(filter?: AuditFilter): Promise<AuditEventDto[]>;
 
   createWorkflowRun(releaseId: string, graphVersion: string): Promise<WorkflowRunRecord>;
+  createQueuedWorkflowRun(releaseId: string, graphVersion: string, type: "EVALUATE_RELEASE", checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord>;
+  claimNextWorkflowRun(type: "EVALUATE_RELEASE", workerId: string, leaseExpiresAt: string, now: string): Promise<WorkflowRunRecord | undefined>;
   claimWorkflow(releaseId: string, graphVersion: string): Promise<WorkflowClaim | undefined>;
   failWorkflow(releaseId: string, runId: string, expectedVersion: number, previousState: ReleaseState, checkpoint: Record<string, unknown>): Promise<boolean>;
   updateWorkflowRun(id: string, status: WorkflowRunRecord["status"], checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord | undefined>;

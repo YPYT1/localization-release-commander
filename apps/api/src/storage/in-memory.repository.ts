@@ -343,9 +343,26 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
 
   async createWorkflowRun(releaseId: string, graphVersion: string): Promise<WorkflowRunRecord> {
     const now = new Date().toISOString();
-    const run: WorkflowRunRecord = { id: randomUUID(), releaseId, graphVersion, checkpoint: {}, status: "RUNNING", createdAt: now, updatedAt: now };
+    const run: WorkflowRunRecord = { id: randomUUID(), releaseId, graphVersion, checkpoint: {}, status: "RUNNING", attempt: 0, createdAt: now, updatedAt: now };
     this.runs.set(run.id, run);
     return copy(run);
+  }
+
+  async createQueuedWorkflowRun(releaseId: string, graphVersion: string, type: "EVALUATE_RELEASE", checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord> {
+    const now = new Date().toISOString();
+    const run: WorkflowRunRecord = { id: randomUUID(), releaseId, graphVersion, type, checkpoint: copy(checkpoint), status: "WAITING", attempt: 0, createdAt: now, updatedAt: now };
+    this.runs.set(run.id, run);
+    return copy(run);
+  }
+
+  async claimNextWorkflowRun(type: "EVALUATE_RELEASE", workerId: string, leaseExpiresAt: string, now: string): Promise<WorkflowRunRecord | undefined> {
+    const candidate = [...this.runs.values()]
+      .filter((run) => run.type === type && (run.status === "WAITING" || (run.status === "RUNNING" && !!run.leaseExpiresAt && run.leaseExpiresAt <= now)))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))[0];
+    if (!candidate) return undefined;
+    const claimed = { ...candidate, status: "RUNNING" as const, attempt: candidate.attempt + 1, leaseOwner: workerId, leaseExpiresAt, updatedAt: now };
+    this.runs.set(claimed.id, claimed);
+    return copy(claimed);
   }
 
   async claimWorkflow(releaseId: string, graphVersion: string): Promise<WorkflowClaim | undefined> {
@@ -353,7 +370,7 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     if (!release) return undefined;
     if ([...this.runs.values()].some((run) => run.releaseId === releaseId && run.graphVersion === graphVersion && run.status === "RUNNING")) return undefined;
     const now = new Date().toISOString();
-    const run: WorkflowRunRecord = { id: randomUUID(), releaseId, graphVersion, checkpoint: {}, status: "RUNNING", createdAt: now, updatedAt: now };
+    const run: WorkflowRunRecord = { id: randomUUID(), releaseId, graphVersion, checkpoint: {}, status: "RUNNING", attempt: 0, createdAt: now, updatedAt: now };
     const claimed = this.nextRelease(release, "VALIDATING");
     this.runs.set(run.id, run);
     this.releases.set(releaseId, claimed);

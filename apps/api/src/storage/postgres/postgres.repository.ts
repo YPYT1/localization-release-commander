@@ -133,8 +133,12 @@ interface WorkflowRunRow extends QueryResultRow {
   id: string;
   releaseId: string;
   graphVersion: string;
+  type: "EVALUATE_RELEASE" | null;
   checkpoint: Record<string, unknown>;
   status: WorkflowRunRecord["status"];
+  attempt: number;
+  leaseOwner: string | null;
+  leaseExpiresAt: Date | string | null;
   createdAt: Date | string;
   updatedAt: Date | string;
 }
@@ -153,7 +157,8 @@ const APPROVAL_COLUMNS = `id, action_id AS "actionId", actor_id AS "actorId", de
 const DELIVERY_COLUMNS = `id, release_id AS "releaseId", provider, request_id AS "requestId", status,
   response_json AS response, created_at AS "createdAt"`;
 const AUDIT_COLUMNS = `id, release_id AS "releaseId", type, actor, payload_json AS payload, occurred_at AS "occurredAt"`;
-const RUN_COLUMNS = `id, release_id AS "releaseId", graph_version AS "graphVersion", checkpoint_json AS checkpoint, status,
+const RUN_COLUMNS = `id, release_id AS "releaseId", graph_version AS "graphVersion", work_type AS type, checkpoint_json AS checkpoint, status, attempt,
+  lease_owner AS "leaseOwner", lease_expires_at AS "leaseExpiresAt",
   created_at AS "createdAt", updated_at AS "updatedAt"`;
 
 export class PostgresReleaseRepository implements ReleaseRepository {
@@ -689,6 +694,28 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     return this.workflowRun(result.rows[0]!);
   }
 
+  async createQueuedWorkflowRun(releaseId: string, graphVersion: string, type: "EVALUATE_RELEASE", checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord> {
+    const result = await this.pool.query<WorkflowRunRow>(
+      `INSERT INTO workflow_runs(id, release_id, graph_version, work_type, checkpoint_json, status) VALUES ($1, $2, $3, $4, $5::jsonb, 'WAITING') RETURNING ${RUN_COLUMNS}`,
+      [randomUUID(), releaseId, graphVersion, type, JSON.stringify(checkpoint)],
+    );
+    return this.workflowRun(result.rows[0]!);
+  }
+
+  async claimNextWorkflowRun(type: "EVALUATE_RELEASE", workerId: string, leaseExpiresAt: string, now: string): Promise<WorkflowRunRecord | undefined> {
+    const result = await this.pool.query<WorkflowRunRow>(
+      `WITH candidate AS (
+         SELECT id FROM workflow_runs
+         WHERE work_type = $1 AND (status = 'WAITING' OR (status = 'RUNNING' AND lease_expires_at <= $4::timestamptz))
+         ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT 1
+       )
+       UPDATE workflow_runs AS run SET status = 'RUNNING', attempt = attempt + 1, lease_owner = $2, lease_expires_at = $3::timestamptz, updated_at = $4::timestamptz
+       FROM candidate WHERE run.id = candidate.id RETURNING ${RUN_COLUMNS}`,
+      [type, workerId, leaseExpiresAt, now],
+    );
+    return result.rows[0] ? this.workflowRun(result.rows[0]) : undefined;
+  }
+
   async claimWorkflow(releaseId: string, graphVersion: string): Promise<WorkflowClaim | undefined> {
     const client = await this.pool.connect();
     try {
@@ -831,7 +858,16 @@ export class PostgresReleaseRepository implements ReleaseRepository {
   }
 
   private workflowRun(row: WorkflowRunRow): WorkflowRunRecord {
-    return { ...row, checkpoint: row.checkpoint ?? {}, createdAt: this.iso(row.createdAt), updatedAt: this.iso(row.updatedAt) };
+    const { type, leaseOwner, leaseExpiresAt, ...run } = row;
+    return {
+      ...run,
+      checkpoint: row.checkpoint ?? {},
+      ...(type ? { type } : {}),
+      ...(leaseOwner ? { leaseOwner } : {}),
+      ...(leaseExpiresAt ? { leaseExpiresAt: this.iso(leaseExpiresAt) } : {}),
+      createdAt: this.iso(row.createdAt),
+      updatedAt: this.iso(row.updatedAt),
+    };
   }
 
   private iso(value: Date | string): string {
