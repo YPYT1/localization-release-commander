@@ -25,6 +25,7 @@ import {
   NewFinding,
   NewAssetRecord,
   NewSubmission,
+  ReleaseListFilter,
   ReleaseRecord,
   ReleaseRepository,
   type WorkflowClaim,
@@ -76,9 +77,14 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     return copy(release);
   }
 
-  async listReleases(projectIds?: readonly string[]): Promise<ReleaseSummaryDto[]> {
+  async listReleases(projectIds?: readonly string[], filter: ReleaseListFilter = {}): Promise<ReleaseSummaryDto[]> {
+    const search = filter.search?.toLocaleLowerCase();
     return [...this.releases.values()]
       .filter((release) => projectIds === undefined || projectIds.includes(release.projectId))
+      .filter((release) => !search || release.id.toLocaleLowerCase().includes(search) || release.episode.toLocaleLowerCase().includes(search))
+      .filter((release) => !filter.state || release.state === filter.state)
+      .filter((release) => !filter.platform || release.platform === filter.platform)
+      .filter((release) => !filter.territory || release.territory === filter.territory)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map(({ id, episode, territory, platform, language, state, updatedAt }) => copy({ id, episode, territory, platform, language, state, updatedAt }));
   }

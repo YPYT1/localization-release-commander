@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { releaseStates } from "@lrc/contracts";
 import { WorkspaceHeading } from "@/components/app-shell";
 import { ConnectionNotice, EmptyState } from "@/components/data-states";
 import { ReleaseTable } from "@/components/release-views";
@@ -20,8 +21,9 @@ export default async function ReleasesPage({ searchParams }: { searchParams: Pro
     <WorkspaceHeading eyebrow="RELEASES / ALL" title="交付版本" detail="按集、地区和平台追踪从 DRAFT 到 COMPLETED 的每次交付。" action={canOperate ? <Link className="primary-button" href="/app/releases/new">创建 Release</Link> : undefined} />
     <form className="filter-bar" method="get" role="search">
       <label><span className="sr-only">搜索</span><input type="search" name="search" defaultValue={typeof params.search === "string" ? params.search : ""} placeholder="搜索集数或 Release ID" /></label>
-      <label><span className="sr-only">状态</span><select name="state" defaultValue={typeof params.state === "string" ? params.state : ""}><option value="">所有状态</option><option value="BLOCKED">BLOCKED</option><option value="NEEDS_HUMAN">NEEDS HUMAN</option><option value="VALIDATING">VALIDATING</option><option value="QC_PASSED">QC PASSED</option><option value="COMPLETED">COMPLETED</option></select></label>
+      <label><span className="sr-only">状态</span><select name="state" defaultValue={typeof params.state === "string" ? params.state : ""}><option value="">所有状态</option>{releaseStates.map((state) => <option key={state} value={state}>{state.replaceAll("_", " ")}</option>)}</select></label>
       <label><span className="sr-only">平台</span><select name="platform" defaultValue={typeof params.platform === "string" ? params.platform : ""}><option value="">所有平台</option><option value="YOUTUBE">YouTube</option><option value="OTT">OTT</option></select></label>
+      <label><span className="sr-only">地区</span><input name="territory" defaultValue={typeof params.territory === "string" ? params.territory : ""} placeholder="地区，例如 US" maxLength={8} /></label>
       <button type="submit">应用筛选</button>
       {query.size ? <Link href="/app/releases">清除</Link> : null}
     </form>

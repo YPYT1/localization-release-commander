@@ -332,6 +332,27 @@ test("a release can be created and listed", async () => {
   });
 });
 
+test("release listing applies authorized search, state, platform, and territory filters", async () => {
+  await withApi(async (baseUrl) => {
+    const create = async (episode: string, territory: string, platform: "YOUTUBE" | "OTT") => {
+      const response = await fetch(`${baseUrl}/releases`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ projectName: `Filter ${episode}`, ruleSetId: platform === "OTT" ? "ott-en-v1" : "youtube-en-v1", episode, territory, platform, language: "en" }),
+      });
+      assert.equal(response.status, 201);
+      return response.json() as Promise<ReleaseSummaryDto>;
+    };
+    const matched = await create("Alpha pilot", "US", "YOUTUBE");
+    await create("Bravo pilot", "JP", "OTT");
+
+    const filtered = (await (await fetch(`${baseUrl}/releases?search=alpha&state=DRAFT&platform=YOUTUBE&territory=us`)).json()) as ReleaseSummaryDto[];
+    assert.deepEqual(filtered.map(({ id }) => id), [matched.id]);
+    assert.equal((await fetch(`${baseUrl}/releases?state=UNKNOWN`)).status, 400);
+    assert.equal((await fetch(`${baseUrl}/releases?territory=U1`)).status, 400);
+  });
+});
+
 test("an asset is hashed, deduplicated, and visible in release detail", async () => {
   await withApi(async (baseUrl) => {
     const releaseResponse = await fetch(`${baseUrl}/releases`, {

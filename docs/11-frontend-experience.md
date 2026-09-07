@@ -46,7 +46,7 @@
 | 路由 | 内容 |
 |---|---|
 | `/app` | 今日阻断项、待审批、进行中的发布、最近交付 |
-| `/app/releases` | 按项目/地区/平台筛选的 Release 列表 |
+| `/app/releases` | 按项目、集数/Release ID、状态、地区和平台筛选的 Release 列表 |
 | `/app/releases/new` | 创建 Release、上传资产、选择 RuleSet |
 | `/app/releases/:id` | 交付详情、状态、资产、Finding、动作、时间线 |
 | `/app/releases/:id/findings` | 问题列表、严重度、来源、修复/指派 |

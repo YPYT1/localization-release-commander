@@ -35,6 +35,7 @@ import {
   type NewFinding,
   type NewSubmission,
   type ReleaseRecord,
+  type ReleaseListFilter,
   type ReleaseRepository,
   type WorkflowClaim,
   type WorkflowRunRecord,
@@ -186,11 +187,24 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     return this.release(result.rows[0]!);
   }
 
-  async listReleases(projectIds?: readonly string[]): Promise<ReleaseSummaryDto[]> {
+  async listReleases(projectIds?: readonly string[], filter: ReleaseListFilter = {}): Promise<ReleaseSummaryDto[]> {
     if (projectIds?.length === 0) return [];
-    const result = projectIds
-      ? await this.pool.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases WHERE project_id = ANY($1::uuid[]) ORDER BY updated_at DESC, id`, [projectIds])
-      : await this.pool.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases ORDER BY updated_at DESC, id`);
+    const values: unknown[] = [];
+    const clauses: string[] = [];
+    const add = (clause: string, value: unknown) => {
+      values.push(value);
+      clauses.push(clause.replace("?", `$${values.length}`));
+    };
+    if (projectIds) add("project_id = ANY(?::uuid[])", projectIds);
+    if (filter.search) {
+      values.push(`%${filter.search}%`);
+      clauses.push(`(episode ILIKE $${values.length} OR id::text ILIKE $${values.length})`);
+    }
+    if (filter.state) add("state = ?", filter.state);
+    if (filter.platform) add("platform = ?", filter.platform);
+    if (filter.territory) add("territory = ?", filter.territory);
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const result = await this.pool.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases ${where} ORDER BY updated_at DESC, id`, values);
     return result.rows.map((row) => this.releaseSummary(row));
   }
 

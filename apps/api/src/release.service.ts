@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import type { AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto } from "@lrc/contracts";
-import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseRepository } from "./domain/repository.js";
+import { releaseStates, type AuditEventDto, type CreateReleaseInput, type FindingDto, type Platform, type ReleaseDetailDto, type ReleaseState, type ReleaseSummaryDto } from "@lrc/contracts";
+import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseListFilter, type ReleaseRepository } from "./domain/repository.js";
 import { getRuleSet, RULE_SETS } from "./rulesets.js";
 import type { AuthPrincipal } from "./auth/auth.js";
 import { ProjectAccessService } from "./auth/project-access.service.js";
@@ -35,12 +35,13 @@ export class ReleaseService {
     return (await this.repository.getRelease(release.id))!;
   }
 
-  listReleases(principal: AuthPrincipal, projectId?: string): Promise<ReleaseSummaryDto[]> {
-    if (projectId) {
-      this.access.assertProject(principal, projectId);
-      return this.repository.listReleases([projectId]);
+  listReleases(principal: AuthPrincipal, query: Record<string, string | undefined> = {}): Promise<ReleaseSummaryDto[]> {
+    const filter = this.parseReleaseFilter(query);
+    if (query.projectId) {
+      this.access.assertProject(principal, query.projectId);
+      return this.repository.listReleases([query.projectId], filter);
     }
-    return this.repository.listReleases(this.access.projectFilter(principal));
+    return this.repository.listReleases(this.access.projectFilter(principal), filter);
   }
 
   getRelease(id: string, principal: AuthPrincipal): Promise<ReleaseDetailDto> {
@@ -100,6 +101,23 @@ export class ReleaseService {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new BadRequestException("limit must be an integer between 1 and 200");
     if (query.after && Number.isNaN(Date.parse(query.after))) throw new BadRequestException("after must be an ISO date-time");
     return { releaseId: query.releaseId, actor: query.actor, type: query.type, after: query.after, limit };
+  }
+
+  private parseReleaseFilter(query: Record<string, string | undefined>): ReleaseListFilter {
+    const search = query.search?.trim();
+    if (search && search.length > 100) throw new BadRequestException("search must be at most 100 characters");
+    const state = query.state;
+    if (state && !releaseStates.includes(state as ReleaseState)) throw new BadRequestException("state is not supported");
+    const platform = query.platform;
+    if (platform && platform !== "YOUTUBE" && platform !== "OTT") throw new BadRequestException("platform is not supported");
+    const territory = query.territory?.trim().toUpperCase();
+    if (territory && !/^[A-Z]{2,8}$/.test(territory)) throw new BadRequestException("territory must contain 2 to 8 letters");
+    return {
+      ...(search ? { search } : {}),
+      ...(state ? { state: state as ReleaseState } : {}),
+      ...(platform ? { platform: platform as Platform } : {}),
+      ...(territory ? { territory } : {}),
+    };
   }
 
   private auditSummary(event: AuditEventDto): string {

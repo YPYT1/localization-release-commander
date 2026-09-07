@@ -22,8 +22,8 @@ export class ReleasesController {
   }
 
   @Get()
-  list(@CurrentPrincipal() principal: AuthPrincipal, @Query("projectId") projectId?: string): Promise<ReleaseSummaryDto[]> {
-    return this.releases.listReleases(principal, projectId);
+  list(@CurrentPrincipal() principal: AuthPrincipal, @Query() query: Record<string, string | undefined>): Promise<ReleaseSummaryDto[]> {
+    return this.releases.listReleases(principal, query);
   }
 
   @Get(":id")

@@ -355,7 +355,7 @@ button { border: 0; }
 .data-table td small { color: var(--muted-paper); font-size: 8px; }
 .data-table .row-link { display: block; color: var(--amber-deep); font-size: 18px; text-align: right; }
 .table-meta { display: flex; justify-content: space-between; padding: 20px 0 12px; color: var(--muted-paper); font-size: 8px; letter-spacing: .08em; }
-.filter-bar { display: grid; grid-template-columns: minmax(220px, 1fr) 170px 150px auto auto; gap: 10px; align-items: center; padding: 24px 0; border-bottom: 1px solid var(--paper-line); }
+.filter-bar { display: grid; grid-template-columns: minmax(220px, 1fr) 170px 150px 110px auto auto; gap: 10px; align-items: center; padding: 24px 0; border-bottom: 1px solid var(--paper-line); }
 .filter-bar input, .filter-bar select { width: 100%; height: 39px; padding: 0 12px; border: 1px solid var(--paper-line); border-radius: 0; background: var(--paper-bright); color: var(--ink); outline: 0; font-size: 10px; }
 .filter-bar input:focus, .filter-bar select:focus { border-color: var(--amber-deep); }
 .filter-bar button { height: 39px; padding: 0 16px; cursor: pointer; background: var(--ink); color: var(--paper); font-size: 10px; font-weight: 800; }

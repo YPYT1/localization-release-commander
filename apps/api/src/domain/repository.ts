@@ -87,6 +87,13 @@ export interface AuditFilter {
   limit?: number;
 }
 
+export interface ReleaseListFilter {
+  search?: string;
+  state?: ReleaseState;
+  platform?: Platform;
+  territory?: string;
+}
+
 export interface AssetAuditContext {
   actor: string;
   sizeBytes: number;
@@ -135,7 +142,7 @@ export interface ReleaseRepository {
   createProject(name: string): Promise<ProjectDto>;
   getProject(id: string): Promise<ProjectDto | undefined>;
   createRelease(input: CreateReleaseInput & { projectId: string }): Promise<ReleaseRecord>;
-  listReleases(projectIds?: readonly string[]): Promise<ReleaseSummaryDto[]>;
+  listReleases(projectIds?: readonly string[], filter?: ReleaseListFilter): Promise<ReleaseSummaryDto[]>;
   getReleaseRecord(id: string): Promise<ReleaseRecord | undefined>;
   getRelease(id: string): Promise<ReleaseDetailDto | undefined>;
   updateReleaseState(id: string, state: ReleaseState): Promise<ReleaseRecord | undefined>;
