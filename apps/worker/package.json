@@ -13,6 +13,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
     "build": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && tsc -p tsconfig.json",
     "typecheck": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && tsc --noEmit -p tsconfig.json",
     "lint": "pnpm run typecheck",

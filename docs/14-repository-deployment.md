@@ -20,3 +20,23 @@
 - 单仓库不等于单体部署；Web、API、Worker 仍可分别扩容和发布。
 
 当三个团队拥有独立发布节奏、权限或合规边界时，再拆成多个仓库；MVP 阶段不承担这项同步成本。
+
+## 容器交付
+
+仓库根目录的 `Dockerfile` 用 `SERVICE` 构建参数生成 Web、API 或 Worker 镜像；它始终先构建共享 contracts/QC，再构建目标服务。运行阶段沿用同一 workspace，避免 workspace 软链接在镜像内断裂。
+
+`compose.yaml` 适用于本地集成和单机演示：
+
+- `postgres` 使用命名卷保存领域数据；
+- `api` 使用命名卷保存不可变资产，并执行迁移；
+- `worker` 只通过 `WORKER_API_URL` 和共享密钥访问 API，不暴露端口；
+- `web` 仅通过服务端 `API_URL` 访问 API。
+
+`AUTH_JWT_SECRET` 与 `WORKER_SHARED_SECRET` 必须分别提供至少 32 字节的随机值。共享密钥只存在于 API/Worker 环境，不能进入 Web build 或浏览器响应。
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+本机未安装 Docker 时，仍可分别使用 `pnpm --filter @lrc/api dev`、`pnpm --filter @lrc/worker dev` 和 `pnpm --filter @lrc/web dev`。容器配置语法与镜像构建需在具备 Docker Engine 的环境中验证。

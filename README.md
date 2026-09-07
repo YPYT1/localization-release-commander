@@ -185,7 +185,7 @@ pnpm --filter @lrc/api test
 - PostgreSQL 是领域事实源；Redis 只能承担队列，不应保存最终业务状态。
 - 资产当前保存到受控挂载目录。生产部署必须提供持久卷、备份、容量监控和同卷临时目录；当前没有 S3 Adapter。
 - Worker 不暴露公网端口；平台凭证应只出现在服务端 Adapter，并与 Web/模型上下文隔离。
-- `compose.yaml` 是本地数据库辅助，不是完整生产编排；仓库当前没有应用 Dockerfile、镜像发布或 Kubernetes/Render 清单。
+- `compose.yaml` 启动 Web、API、Worker 与 PostgreSQL；根目录 `Dockerfile` 以 `SERVICE=web|api|worker` 构建目标服务镜像。它是单机/集成编排，不包含镜像注册、Kubernetes 或托管平台清单。
 
 ## 安全原则
 
@@ -211,7 +211,7 @@ pnpm --filter @lrc/api test
 - 工作台尚未完成断点续传。
 - Action/Approval/Delivery 已有幂等、原子 claim、提交前复验和本地收尾恢复；租约超时、transactional outbox 仍是后续生产化工作。
 - 100 包评测集、离线回放、质量指标和真实端到端验收证据尚未完成。
-- OpenTelemetry、指标/追踪/告警、容器镜像和完整部署流水线尚未落地。
+- OpenTelemetry、指标/追踪/告警、镜像注册和完整部署流水线尚未落地。
 - LLM 规范解释、Finding 聚类和文案辅助尚未接入；当前系统刻意保持确定性且不依赖模型。
 
 实现路线见[实施计划](PLAN.md)与[评测计划](docs/08-evaluation.md)。

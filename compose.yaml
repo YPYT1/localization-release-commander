@@ -15,5 +15,51 @@ services:
     volumes:
       - lrc-postgres:/var/lib/postgresql/data
 
+  api:
+    build:
+      context: .
+      args:
+        SERVICE: api
+    environment:
+      DATABASE_URL: postgresql://lrc:lrc@postgres:5432/lrc
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?set AUTH_JWT_SECRET in .env}
+      WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:?set WORKER_SHARED_SECRET in .env}
+      CORS_ORIGINS: http://localhost:3000
+      ASSET_STORAGE_DIR: /var/lib/lrc/assets
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    volumes:
+      - lrc-assets:/var/lib/lrc/assets
+
+  worker:
+    build:
+      context: .
+      args:
+        SERVICE: worker
+    environment:
+      WORKER_API_URL: http://api:3001
+      WORKER_SHARED_SECRET: ${WORKER_SHARED_SECRET:?set WORKER_SHARED_SECRET in .env}
+      WORKER_ID: lrc-compose-worker
+    depends_on:
+      api:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      args:
+        SERVICE: web
+    environment:
+      API_URL: http://api:3001
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "3000:3000"
+
 volumes:
   lrc-postgres:
+  lrc-assets:

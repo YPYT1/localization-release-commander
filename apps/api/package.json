@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch --entryFile main",
+    "start": "node dist/main.js",
     "build": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && pnpm --filter @lrc/worker build && nest build",
     "typecheck": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && pnpm --filter @lrc/worker build && tsc --noEmit -p tsconfig.json",
     "lint": "pnpm run typecheck",
