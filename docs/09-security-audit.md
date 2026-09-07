@@ -22,3 +22,8 @@
 ## 失败处理
 
 区分可重试错误、人工可修复错误和永久错误；对外部副作用使用幂等键和 request id；回滚只恢复应用状态和交付包引用，不假设平台一定支持删除。
+
+## 网络边界
+
+- Web 的 `API_URL` 只在 Next.js 服务端读取；不要把内部 API 地址暴露为 `NEXT_PUBLIC_*` 变量。
+- NestJS 仅允许 `CORS_ORIGINS` 中的精确 HTTP(S) origin；配置解析会拒绝通配符、非 HTTP(S) 协议和带路径的 URL。

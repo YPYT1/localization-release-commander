@@ -122,8 +122,8 @@ pnpm dev
 | `DEMO_AUTH_ENABLED` | `false` | 非生产环境开启固定 persona 演示登录 |
 | `DATABASE_URL` | 无 | 设置后使用 PostgreSQL；未设置时使用内存 Repository |
 | `POSTGRES_TEST_URL` | 无 | 开启真实 PostgreSQL Repository 集成测试 |
-| `API_URL` | `http://localhost:4000` | Next.js 服务端调用 API；本地应设为 `http://localhost:3001` |
-| `NEXT_PUBLIC_API_URL` | Web 后备 `http://localhost:4000`；API CORS 后备 `http://localhost:3000` | 当前同时被 Web API 后备和 API CORS 配置复用，生产前需要拆分为明确的前端 origin |
+| `API_URL` | `http://localhost:3001` | Next.js 服务端调用 API；仅在 Web 服务端读取，不暴露给浏览器 |
+| `CORS_ORIGINS` | `http://localhost:3000` | NestJS 接受的浏览器来源，逗号分隔的绝对 HTTP(S) origin；不能填写 API 地址或路径 |
 | `PORT` | `3001` | NestJS 监听端口 |
 | `ASSET_STORAGE_DIR` | 开发环境为 `data/assets` | 受控资产根目录；生产环境必须是绝对路径并挂载持久卷 |
 | `ASSET_MAX_BYTES` | `524288000` | 单文件上限，默认 500 MiB |
@@ -211,7 +211,7 @@ pnpm --filter @lrc/api test
 - 工作台尚未完成 Release 搜索、状态/平台筛选、上传进度显示、断点续传和全部稳定错误码。
 - Action/Approval/Delivery 已有幂等、原子 claim、提交前复验和本地收尾恢复；租约超时、transactional outbox 仍是后续生产化工作。
 - 100 包评测集、离线回放、质量指标和真实端到端验收证据尚未完成。
-- OpenTelemetry、指标/追踪/告警、独立 CORS frontend origin、容器镜像和完整部署流水线尚未落地。
+- OpenTelemetry、指标/追踪/告警、容器镜像和完整部署流水线尚未落地。
 - LLM 规范解释、Finding 聚类和文案辅助尚未接入；当前系统刻意保持确定性且不依赖模型。
 
 实现路线见[实施计划](PLAN.md)与[评测计划](docs/08-evaluation.md)。

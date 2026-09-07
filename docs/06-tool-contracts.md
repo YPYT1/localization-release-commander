@@ -52,6 +52,8 @@ GET    /settings
 
 `GET /health` 只检查 API 进程存活；`GET /health/ready` 会检查当前存储依赖，PostgreSQL 不可访问时返回 `503 Service Unavailable`。两者都不要求 JWT，以便部署平台探测。
 
+Web 服务端通过 `API_URL` 访问 NestJS；API 的跨域策略仅使用 `CORS_ORIGINS`，其值为逗号分隔的绝对 HTTP(S) browser origin，例如 `https://console.example.com,https://staging-console.example.com`。不接受 API 地址、通配符或带路径的 URL。
+
 `POST /auth/demo-login` 只用于本地演示：必须显式设置 `DEMO_AUTH_ENABLED=true`，并且在 `NODE_ENV=production` 时固定返回 404。它只接受服务端内置 persona，签发 1 小时会话且响应使用 `Cache-Control: no-store`。
 
 ## 确定性 QC 与资产契约

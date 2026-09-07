@@ -15,7 +15,7 @@ import type {
   WorkflowResultDto,
 } from "@lrc/contracts";
 
-export const API_BASE_URL = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+export const API_BASE_URL = process.env.API_URL ?? "http://localhost:3001";
 export const AUTH_COOKIE = "lrc_session";
 
 export const authRoles = ["Operator", "Approver", "ReleaseManager", "Admin"] as const;
