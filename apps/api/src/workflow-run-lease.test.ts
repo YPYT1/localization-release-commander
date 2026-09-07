@@ -15,6 +15,7 @@ test("a worker lease claims only queued release evaluations and can be recovered
   });
   const queued = await repository.createQueuedWorkflowRun(release.id, "worker-evaluation-v1", "EVALUATE_RELEASE", { schemaVersion: 1 });
   await repository.createWorkflowRun(release.id, "api-deterministic-v1");
+  assert.equal(await repository.claimWorkflow(release.id, "worker-evaluation-v1", { type: "EVALUATE_RELEASE", checkpoint: {} }), undefined);
 
   const first = await repository.claimNextWorkflowRun("EVALUATE_RELEASE", "worker-a", "2026-09-07T00:01:00.000Z", "2026-09-07T00:00:00.000Z");
   assert.equal(first?.id, queued.id);

@@ -349,6 +349,10 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     return copy(run);
   }
 
+  async getWorkflowRun(id: string): Promise<WorkflowRunRecord | undefined> {
+    return this.read(this.runs, id);
+  }
+
   async createQueuedWorkflowRun(releaseId: string, graphVersion: string, type: "EVALUATE_RELEASE", checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord> {
     const now = new Date().toISOString();
     const run: WorkflowRunRecord = { id: randomUUID(), releaseId, graphVersion, type, checkpoint: copy(checkpoint), status: "WAITING", attempt: 0, createdAt: now, updatedAt: now };
@@ -369,7 +373,8 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
   async claimWorkflow(releaseId: string, graphVersion: string, queued?: QueuedWorkflow): Promise<WorkflowClaim | undefined> {
     const release = this.releases.get(releaseId);
     if (!release) return undefined;
-    if ([...this.runs.values()].some((run) => run.releaseId === releaseId && run.graphVersion === graphVersion && run.status === "RUNNING")) return undefined;
+    if ([...this.runs.values()].some((run) => run.releaseId === releaseId && run.graphVersion === graphVersion
+      && (run.status === "RUNNING" || run.status === "WAITING" && run.type !== undefined))) return undefined;
     const now = new Date().toISOString();
     const run: WorkflowRunRecord = {
       id: randomUUID(), releaseId, graphVersion, checkpoint: copy(queued?.checkpoint ?? {}),

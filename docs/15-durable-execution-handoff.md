@@ -11,9 +11,9 @@
 | 能力 | 当前实现 | 本交接完成后 |
 |---|---|---|
 | Release 事实源 | PostgreSQL / 内存仓储 | PostgreSQL / 内存仓储 |
-| 运行记录 | `workflow_runs`，由 API 同步写入 | `workflow_runs`，由 Worker checkpoint 回写与租约保护 |
-| 长任务 | API 进程内执行 | Worker 领取 `workflow_runs` 执行 |
-| 队列可靠性 | 无 | PostgreSQL 持久化轮询；多 job 类型后再增加 outbox + Redis/BullMQ 唤醒 |
+| 运行记录 | `workflow_runs`，由 API 同步写入 | `workflow_runs` 已支持 Worker 租约与结果回写 |
+| 长任务 | API 进程内执行 | `EVALUATE_RELEASE` 已由 Worker 领取执行 |
+| 队列可靠性 | 无 | `EVALUATE_RELEASE` 已使用 PostgreSQL 持久化轮询；多 job 类型后再增加 outbox + Redis/BullMQ 唤醒 |
 | 外部提交 | API 调用 sandbox adapter | Worker 调用 adapter，API 原子收尾 |
 
 表中“本交接完成后”是待实现目标，不能作为当前能力对外宣称。
@@ -71,7 +71,7 @@ Worker 的业务结果只能通过 API 内部命令提交。API 验证 `runId`�
 
 LangGraph 只编排 Worker 内的纯计算、可重试工具调用和暂停/恢复节点。每个节点从已冻结的 checkpoint 读取，输出一个可验证的结果补丁；API 在接受补丁后更新领域状态。LangGraph 的内存 checkpointer 不能作为生产恢复依据，生产恢复只从 PostgreSQL checkpoint 开始。
 
-当前 `apps/worker/src/release-evaluation.ts` 已作为 API 调用的纯计算图，输出不会直接修改领域事实；它是 `EVALUATE_RELEASE` run 的执行器基础。`apps/worker/src/workflow.ts` 仍是更完整的独立图原型，不得直接接管 API 的 Action/Approval/Delivery 状态。接入时先把它收敛成上述 run type 的执行器，并为每个节点保留回放测试。
+`apps/worker/src/release-evaluation.ts` 已由独立 Worker 进程执行：Worker 通过受共享密钥保护的内部 API 领取冻结输入，执行 LangGraph，并带着 run ID 与 attempt 回写结果。API 验证租约后才持久化 Finding、Action、Release state 与 AuditEvent。`apps/worker/src/workflow.ts` 仍是更完整的独立图原型，不得直接接管 API 的 Action/Approval/Delivery 状态。
 
 ## 交付顺序与验收
 

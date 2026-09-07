@@ -7,6 +7,7 @@ import type { AuthPrincipal } from "../auth/auth.js";
 import { ProjectAccessService } from "../auth/project-access.service.js";
 import { AssetService } from "../asset.service.js";
 import { getRuleSet } from "../rulesets.js";
+import type { ReleaseEvaluationResult } from "@lrc/worker";
 
 const RUNNABLE_STATES: ReleaseState[] = ["DRAFT", "BLOCKED", "REMEDIATING", "NEEDS_HUMAN", "READY_FOR_APPROVAL", "QC_FAILED"];
 const PROVIDER_RECEIPT_KEY = "_lrcProviderReceipt";
@@ -66,27 +67,40 @@ export class ReleaseWorkflowService {
       await this.audit(releaseId, "workflow.started", actor, { runId: run.id, mode: "run" });
       const currentRelease = await this.access.requireRelease(principal, releaseId);
       const result = await this.orchestration.runRelease(currentRelease);
-      const findings = await this.storeValidation(currentRelease, run.id, result.findings, actor);
-      if (result.proposedAction) {
-        const action = await this.ensureAction(currentRelease, result.proposedAction, actor);
-        await this.repository.updateReleaseState(releaseId, "REMEDIATING");
-        await this.repository.updateWorkflowRun(run.id, "WAITING", { state: "REMEDIATING", actionId: action.id });
-        return { releaseId, runId: run.id, state: "REMEDIATING", findings, action };
-      }
-      if (findings.some(({ severity }) => severity === "BLOCKER")) {
-        await this.repository.updateReleaseState(releaseId, "BLOCKED");
-        await this.repository.updateWorkflowRun(run.id, "COMPLETED", { state: "BLOCKED", findingCount: findings.length });
-        return { releaseId, runId: run.id, state: "BLOCKED", findings, action: null };
-      }
-
-      const risk = findings.some(({ code }) => code === "RIGHTS_EXPIRING_SOON") ? "R3" : "R2";
-      const action = await this.ensureSubmissionAction(currentRelease, actor, risk);
-      await this.repository.updateReleaseState(releaseId, "READY_FOR_APPROVAL");
-      await this.repository.updateWorkflowRun(run.id, "WAITING", { state: "READY_FOR_APPROVAL", actionId: action.id });
-      return { releaseId, runId: run.id, state: "READY_FOR_APPROVAL", findings, action };
+      return this.finishEvaluationRun(currentRelease, run.id, result, actor);
     } catch (error) {
       return this.failRun(releaseId, run.id, claim.version, claim.previousState, error, actor);
     }
+  }
+
+  async completeWorkerEvaluation(runId: string, workerId: string, attempt: number, result: ReleaseEvaluationResult): Promise<WorkflowResultDto> {
+    const run = await this.repository.getWorkflowRun(runId);
+    if (!run || run.type !== "EVALUATE_RELEASE") throw new NotFoundException("Queued workflow run not found");
+    if (run.status !== "RUNNING" || run.leaseOwner !== workerId || run.attempt !== attempt) throw new ConflictException("Worker lease is no longer current");
+    const release = await this.repository.getRelease(run.releaseId);
+    if (!release || release.state !== "VALIDATING") throw new ConflictException("Release is no longer awaiting worker evaluation");
+    const actor = typeof run.checkpoint.actorId === "string" ? run.checkpoint.actorId : `worker:${workerId}`;
+    return this.finishEvaluationRun(release, run.id, result, actor);
+  }
+
+  private async finishEvaluationRun(release: ReleaseDetailDto, runId: string, result: OrchestrationRunResult, actor: string): Promise<WorkflowResultDto> {
+    const findings = await this.storeValidation(release, runId, result.findings, actor);
+    if (result.proposedAction) {
+      const action = await this.ensureAction(release, result.proposedAction, actor);
+      await this.repository.updateReleaseState(release.id, "REMEDIATING");
+      await this.repository.updateWorkflowRun(runId, "WAITING", { state: "REMEDIATING", actionId: action.id });
+      return { releaseId: release.id, runId, state: "REMEDIATING", findings, action };
+    }
+    if (findings.some(({ severity }) => severity === "BLOCKER")) {
+      await this.repository.updateReleaseState(release.id, "BLOCKED");
+      await this.repository.updateWorkflowRun(runId, "COMPLETED", { state: "BLOCKED", findingCount: findings.length });
+      return { releaseId: release.id, runId, state: "BLOCKED", findings, action: null };
+    }
+    const risk = findings.some(({ code }) => code === "RIGHTS_EXPIRING_SOON") ? "R3" : "R2";
+    const action = await this.ensureSubmissionAction(release, actor, risk);
+    await this.repository.updateReleaseState(release.id, "READY_FOR_APPROVAL");
+    await this.repository.updateWorkflowRun(runId, "WAITING", { state: "READY_FOR_APPROVAL", actionId: action.id });
+    return { releaseId: release.id, runId, state: "READY_FOR_APPROVAL", findings, action };
   }
 
   async executeAction(actionId: string, principal: AuthPrincipal): Promise<ActionDto> {

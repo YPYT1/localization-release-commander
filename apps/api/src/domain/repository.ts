@@ -203,6 +203,7 @@ export interface ReleaseRepository {
   listAudit(filter?: AuditFilter): Promise<AuditEventDto[]>;
 
   createWorkflowRun(releaseId: string, graphVersion: string): Promise<WorkflowRunRecord>;
+  getWorkflowRun(id: string): Promise<WorkflowRunRecord | undefined>;
   createQueuedWorkflowRun(releaseId: string, graphVersion: string, type: "EVALUATE_RELEASE", checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord>;
   claimNextWorkflowRun(type: "EVALUATE_RELEASE", workerId: string, leaseExpiresAt: string, now: string): Promise<WorkflowRunRecord | undefined>;
   claimWorkflow(releaseId: string, graphVersion: string, queued?: QueuedWorkflow): Promise<WorkflowClaim | undefined>;

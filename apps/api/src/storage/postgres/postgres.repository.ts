@@ -695,6 +695,11 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     return this.workflowRun(result.rows[0]!);
   }
 
+  async getWorkflowRun(id: string): Promise<WorkflowRunRecord | undefined> {
+    const result = await this.pool.query<WorkflowRunRow>(`SELECT ${RUN_COLUMNS} FROM workflow_runs WHERE id = $1`, [id]);
+    return result.rows[0] ? this.workflowRun(result.rows[0]) : undefined;
+  }
+
   async createQueuedWorkflowRun(releaseId: string, graphVersion: string, type: "EVALUATE_RELEASE", checkpoint: Record<string, unknown>): Promise<WorkflowRunRecord> {
     const result = await this.pool.query<WorkflowRunRow>(
       `INSERT INTO workflow_runs(id, release_id, graph_version, work_type, checkpoint_json, status) VALUES ($1, $2, $3, $4, $5::jsonb, 'WAITING') RETURNING ${RUN_COLUMNS}`,
@@ -727,7 +732,8 @@ export class PostgresReleaseRepository implements ReleaseRepository {
         return undefined;
       }
       const active = await client.query(
-        `SELECT 1 FROM workflow_runs WHERE release_id = $1 AND graph_version = $2 AND status = 'RUNNING' LIMIT 1`,
+        `SELECT 1 FROM workflow_runs WHERE release_id = $1 AND graph_version = $2
+         AND (status = 'RUNNING' OR (status = 'WAITING' AND work_type IS NOT NULL)) LIMIT 1`,
         [releaseId, graphVersion],
       );
       if (active.rowCount) {

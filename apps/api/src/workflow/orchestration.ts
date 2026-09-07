@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { ActionDto, AssetDto, AssetKind, DeliveryAttemptDto, ReleaseDetailDto } from "@lrc/contracts";
-import { evaluateRelease, type ReleaseEvaluationAction } from "@lrc/worker";
+import { evaluateRelease, type ReleaseEvaluationAction, type ReleaseEvaluationInput, type ReleaseEvaluationResult } from "@lrc/worker";
 import { repairSrt, srtToTtml, validateSrt, type SubtitleValidationOptions } from "@lrc/qc";
 import type { NewFinding } from "../domain/repository.js";
 import { getRuleSet, type RuleSetDefinition } from "../rulesets.js";
@@ -51,11 +51,19 @@ export class DeterministicOrchestrationService implements OrchestrationService {
   ) {}
 
   async validateRelease(release: ReleaseDetailDto): Promise<NewFinding[]> {
-    return (await evaluateRelease(await this.evaluationInput(release))).findings;
+    return (await this.applyEvaluation(await this.prepareEvaluation(release))).findings;
   }
 
   async runRelease(release: ReleaseDetailDto): Promise<OrchestrationRunResult> {
-    return evaluateRelease(await this.evaluationInput(release));
+    return this.applyEvaluation(await this.prepareEvaluation(release));
+  }
+
+  async prepareEvaluation(release: ReleaseDetailDto): Promise<ReleaseEvaluationInput> {
+    return this.evaluationInput(release);
+  }
+
+  async applyEvaluation(input: ReleaseEvaluationInput): Promise<ReleaseEvaluationResult> {
+    return evaluateRelease(input);
   }
 
   async executeAction(action: ActionDto, release: ReleaseDetailDto): Promise<OrchestrationExecutionResult> {
