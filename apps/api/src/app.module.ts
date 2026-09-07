@@ -1,5 +1,5 @@
 import { Module } from "@nestjs/common";
-import { APP_GUARD } from "@nestjs/core";
+import { APP_FILTER, APP_GUARD } from "@nestjs/core";
 import { MulterModule } from "@nestjs/platform-express";
 import { mkdir } from "node:fs/promises";
 import { HealthController } from "./health.controller.js";
@@ -20,6 +20,7 @@ import { AssetStorageService, resolveAssetIncomingDirectory, resolveAssetMaxByte
 import { AssetInspectionService, FFPROBE_RUNNER, FfprobeService, nodeCommandRunner } from "./storage/media-inspection.service.js";
 import { AssetService } from "./asset.service.js";
 import { UploadAssetGuard } from "./upload-asset.guard.js";
+import { ApiExceptionFilter } from "./api-exception.filter.js";
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { UploadAssetGuard } from "./upload-asset.guard.js";
     FfprobeService,
     { provide: FFPROBE_RUNNER, useValue: nodeCommandRunner },
     { provide: AUTH_SECRET, useFactory: loadAuthSecret },
+    { provide: APP_FILTER, useClass: ApiExceptionFilter },
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: ORCHESTRATION_CLOCK, useValue: () => new Date().toISOString() },
     { provide: ORCHESTRATION_SERVICE, useExisting: DeterministicOrchestrationService },

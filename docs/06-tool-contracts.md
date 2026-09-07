@@ -58,6 +58,8 @@ Web 服务端通过 `API_URL` 访问 NestJS；API 的跨域策略仅使用 `CORS
 
 列表响应为 `{ "items": ReleaseSummary[], "nextCursor"?: "opaque" }`。按 `updatedAt DESC, id DESC` 返回；`cursor` 是服务端编码的 `updatedAt + id` keyset 边界，客户端不得解析或构造。省略 `limit` 时返回 50 项，最大 100 项；要读取下一页，保留原筛选条件并携带 `nextCursor`。
 
+所有非 2xx JSON 响应使用 `{ "statusCode": number, "code": string, "message": string | string[], "timestamp": string, "path": string }`。稳定 `code` 分别为：`VALIDATION_FAILED`（400）、`UNAUTHORIZED`（401）、`FORBIDDEN`（403）、`NOT_FOUND`（404）、`CONFLICT`（409）、`DEPENDENCY_UNAVAILABLE`（503）和 `INTERNAL_ERROR`（其他 5xx）。未知异常不返回内部错误细节。
+
 `POST /auth/demo-login` 只用于本地演示：必须显式设置 `DEMO_AUTH_ENABLED=true`，并且在 `NODE_ENV=production` 时固定返回 404。它只接受服务端内置 persona，签发 1 小时会话且响应使用 `Cache-Control: no-store`。
 
 ## 确定性 QC 与资产契约

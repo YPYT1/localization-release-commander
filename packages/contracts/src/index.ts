@@ -155,3 +155,13 @@ export interface HealthDto {
   status: "ok";
   timestamp: string;
 }
+
+export type ApiErrorCode = "VALIDATION_FAILED" | "UNAUTHORIZED" | "FORBIDDEN" | "NOT_FOUND" | "CONFLICT" | "DEPENDENCY_UNAVAILABLE" | "INTERNAL_ERROR";
+
+export interface ApiErrorDto {
+  statusCode: number;
+  code: ApiErrorCode;
+  message: string | string[];
+  timestamp: string;
+  path: string;
+}

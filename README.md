@@ -208,7 +208,7 @@ pnpm --filter @lrc/api test
 - LangGraph checkpoint 目前由调用方传入/返回；API 的 `workflow_runs` 与 Worker 尚未使用同一个持久化 checkpointer 和一致状态流。
 - API QC 已由锁定 RuleSet 和不可变资产字节驱动；缺失/损坏 RIGHTS、SRT 修复和 OTT TTML 派生资产均有确定性门禁与回归测试。
 - 平台 Adapter 是确定性模拟器，尚未接入真实 YouTube/OTT provider、webhook、凭证轮换和限流策略。
-- 工作台尚未完成断点续传和全部稳定错误码。
+- 工作台尚未完成断点续传。
 - Action/Approval/Delivery 已有幂等、原子 claim、提交前复验和本地收尾恢复；租约超时、transactional outbox 仍是后续生产化工作。
 - 100 包评测集、离线回放、质量指标和真实端到端验收证据尚未完成。
 - OpenTelemetry、指标/追踪/告警、容器镜像和完整部署流水线尚未落地。

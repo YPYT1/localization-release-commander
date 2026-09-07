@@ -4,6 +4,8 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import type {
   ActionDto,
+  ApiErrorCode,
+  ApiErrorDto,
   ApprovalDto,
   AuditEventDto,
   CreateReleaseInput,
@@ -41,7 +43,7 @@ export type ApiFailureKind = "connection" | "unauthorized" | "forbidden" | "not-
 
 export type ApiResult<T> =
   | { ok: true; data: T }
-  | { ok: false; kind: ApiFailureKind; message: string; status?: number };
+  | { ok: false; kind: ApiFailureKind; message: string; status?: number; code?: ApiErrorCode };
 
 export type TimelineEventDto = AuditEventDto & { summary: string };
 
@@ -65,21 +67,22 @@ export interface WorkspaceSettingsDto {
 
 export type CreateReleasePayload = CreateReleaseInput;
 
-function responseMessage(status: number, payload: string) {
-  if (status >= 500) return "服务暂时不可用，请稍后重试。";
+function responseError(status: number, payload: string): { message: string; code?: ApiErrorCode } {
+  if (status >= 500) return { message: "服务暂时不可用，请稍后重试。" };
   try {
-    const parsed = JSON.parse(payload) as { message?: unknown };
-    if (typeof parsed.message === "string") return parsed.message;
-    if (Array.isArray(parsed.message)) return parsed.message.filter((item): item is string => typeof item === "string").join("；");
+    const parsed = JSON.parse(payload) as Partial<ApiErrorDto>;
+    const code = typeof parsed.code === "string" ? parsed.code as ApiErrorCode : undefined;
+    if (typeof parsed.message === "string") return { message: parsed.message, ...(code ? { code } : {}) };
+    if (Array.isArray(parsed.message)) return { message: parsed.message.filter((item): item is string => typeof item === "string").join("；"), ...(code ? { code } : {}) };
   } catch { /* non-JSON response */ }
-  return status >= 400 && status < 500 ? "请求未被服务接受。" : "服务返回异常。";
+  return { message: status >= 400 && status < 500 ? "请求未被服务接受。" : "服务返回异常。" };
 }
 
-function failure(status: number, message: string): ApiResult<never> {
-  if (status === 401) return { ok: false, kind: "unauthorized", message: "会话无效或已过期。", status };
-  if (status === 403) return { ok: false, kind: "forbidden", message: "当前身份没有执行此操作的角色权限。", status };
-  if (status === 404) return { ok: false, kind: "not-found", message, status };
-  return { ok: false, kind: "response", message, status };
+function failure(status: number, detail: { message: string; code?: ApiErrorCode }): ApiResult<never> {
+  if (status === 401) return { ok: false, kind: "unauthorized", message: "会话无效或已过期。", status, ...(detail.code ? { code: detail.code } : {}) };
+  if (status === 403) return { ok: false, kind: "forbidden", message: "当前身份没有执行此操作的角色权限。", status, ...(detail.code ? { code: detail.code } : {}) };
+  if (status === 404) return { ok: false, kind: "not-found", message: detail.message, status, ...(detail.code ? { code: detail.code } : {}) };
+  return { ok: false, kind: "response", message: detail.message, status, ...(detail.code ? { code: detail.code } : {}) };
 }
 
 function unwrap<T>(payload: unknown): T {
@@ -108,7 +111,7 @@ async function request<T>(path: string, init?: RequestInit, authenticated = true
 
     if (!response.ok) {
       const detail = await response.text();
-      return failure(response.status, responseMessage(response.status, detail));
+      return failure(response.status, responseError(response.status, detail));
     }
 
     if (response.status === 204) return { ok: true, data: undefined as T };

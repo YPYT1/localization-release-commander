@@ -174,7 +174,9 @@ test("health is public while release data requires a bearer token", async () => 
   await withApi(async (baseUrl) => {
     assert.equal((await globalThis.fetch(`${baseUrl}/health`)).status, 200);
     assert.equal((await globalThis.fetch(`${baseUrl}/health/ready`)).status, 200);
-    assert.equal((await globalThis.fetch(`${baseUrl}/releases`)).status, 401);
+    const unauthenticated = await globalThis.fetch(`${baseUrl}/releases`);
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(((await unauthenticated.json()) as { code?: string }).code, "UNAUTHORIZED");
     assert.equal((await globalThis.fetch(`${baseUrl}/releases`, { headers: { authorization: "Bearer invalid.token.value" } })).status, 401);
   });
 });
@@ -355,7 +357,9 @@ test("release listing applies authorized search, state, platform, and territory 
     const secondPage = (await (await fetch(`${baseUrl}/releases?limit=2&cursor=${encodeURIComponent(firstPage.nextCursor!)}`)).json()) as ReleaseListPageDto;
     assert.deepEqual(new Set([...firstPage.items, ...secondPage.items].map(({ id }) => id)), new Set([matched.id, second.id, third.id]));
     assert.equal(secondPage.nextCursor, undefined);
-    assert.equal((await fetch(`${baseUrl}/releases?state=UNKNOWN`)).status, 400);
+    const invalidState = await fetch(`${baseUrl}/releases?state=UNKNOWN`);
+    assert.equal(invalidState.status, 400);
+    assert.equal(((await invalidState.json()) as { code?: string }).code, "VALIDATION_FAILED");
     assert.equal((await fetch(`${baseUrl}/releases?territory=U1`)).status, 400);
     assert.equal((await fetch(`${baseUrl}/releases?limit=101`)).status, 400);
     assert.equal((await fetch(`${baseUrl}/releases?cursor=not-a-cursor`)).status, 400);
