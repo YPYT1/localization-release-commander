@@ -7,12 +7,13 @@ flowchart LR
     web[Next.js 控制台] --> api[NestJS API]
     api --> db[(PostgreSQL)]
     api --> obj[受控挂载资产目录]
-    api --> qc[确定性 QC 与 RuleSet]
+    api --> graph[LangGraph 纯计算图]
+    graph --> qc[确定性 QC 与 RuleSet]
     api --> adapter[确定性平台 sandbox]
-    worker[LangGraph Worker 原型]
+    worker[独立 Worker 进程待接入]
 ```
 
-当前 API 同步执行 QC、动作和 sandbox 提交。Worker 图尚未接入领域事实源或任务队列；对象存储、Redis/BullMQ、模型、真实平台和 OpenTelemetry 均未实现。
+当前 API 同步执行 QC、动作和 sandbox 提交。`apps/worker` 的 LangGraph 纯计算图已由 API 调用，但尚未作为独立进程领取任务或持久化 checkpoint；对象存储、Redis/BullMQ、模型、真实平台和 OpenTelemetry 均未实现。
 
 ## 目标架构
 

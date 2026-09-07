@@ -205,7 +205,7 @@ pnpm --filter @lrc/api test
 以下能力尚未完成，因此当前版本不能宣称“生产完成”：
 
 - Redis/BullMQ 尚未接入，API 内的长流程还没有真正转移到独立 Worker 队列。
-- LangGraph checkpoint 目前由调用方传入/返回；API 的 `workflow_runs` 与 Worker 尚未使用同一个持久化 checkpointer 和一致状态流。
+- API 已调用 Worker 包内的 LangGraph 纯计算图来生成校验结果和建议动作；但 LangGraph checkpoint 仍由调用方传入/返回，API 的 `workflow_runs` 与独立 Worker 尚未使用同一个持久化 checkpointer 和一致状态流。
 - API QC 已由锁定 RuleSet 和不可变资产字节驱动；缺失/损坏 RIGHTS、SRT 修复和 OTT TTML 派生资产均有确定性门禁与回归测试。
 - 平台 Adapter 是确定性模拟器，尚未接入真实 YouTube/OTT provider、webhook、凭证轮换和限流策略。
 - 工作台尚未完成断点续传。

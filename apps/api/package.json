@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch --entryFile main",
-    "build": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && nest build",
-    "typecheck": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && tsc --noEmit -p tsconfig.json",
+    "build": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && pnpm --filter @lrc/worker build && nest build",
+    "typecheck": "pnpm --filter @lrc/contracts build && pnpm --filter @lrc/qc build && pnpm --filter @lrc/worker build && tsc --noEmit -p tsconfig.json",
     "lint": "pnpm run typecheck",
     "test": "pnpm build && node --test dist/*.test.js",
     "db:migrate": "pnpm build && node dist/storage/postgres/migrate.js"
@@ -13,6 +13,7 @@
   "dependencies": {
     "@lrc/contracts": "workspace:*",
     "@lrc/qc": "workspace:*",
+    "@lrc/worker": "workspace:*",
     "@nestjs/common": "12.0.1",
     "@nestjs/core": "12.0.1",
     "@nestjs/platform-express": "12.0.1",

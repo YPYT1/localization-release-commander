@@ -74,7 +74,7 @@ API 在提交工作时先落库、后通知。通知失败时，周期性 outbox
 
 LangGraph 只编排 Worker 内的纯计算、可重试工具调用和暂停/恢复节点。每个节点从已冻结的 checkpoint 读取，输出一个可验证的结果补丁；API 在接受补丁后更新领域状态。LangGraph 的内存 checkpointer 不能作为生产恢复依据，生产恢复只从 PostgreSQL checkpoint 开始。
 
-当前 `apps/worker/src/workflow.ts` 是独立图原型，不得直接接管 API 的 Action/Approval/Delivery 状态。接入时先把它收敛成上述 job type 的执行器，并为每个节点保留回放测试。
+当前 `apps/worker/src/release-evaluation.ts` 已作为 API 调用的纯计算图，输出不会直接修改领域事实；它是后续 `EVALUATE_RELEASE` job 的执行器基础。`apps/worker/src/workflow.ts` 仍是更完整的独立图原型，不得直接接管 API 的 Action/Approval/Delivery 状态。接入时先把它收敛成上述 job type 的执行器，并为每个节点保留回放测试。
 
 ## 交付顺序与验收
 

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import type { ActionDto, AssetDto, AssetKind, DeliveryAttemptDto, ReleaseDetailDto } from "@lrc/contracts";
-import { checkRightsWindow, repairSrt, srtToTtml, validateSrt, type SubtitleValidationOptions } from "@lrc/qc";
+import { evaluateRelease, type ReleaseEvaluationAction } from "@lrc/worker";
+import { repairSrt, srtToTtml, validateSrt, type SubtitleValidationOptions } from "@lrc/qc";
 import type { NewFinding } from "../domain/repository.js";
 import { getRuleSet, type RuleSetDefinition } from "../rulesets.js";
 import { AssetStorageService } from "../storage/asset-storage.service.js";
@@ -15,11 +16,7 @@ const REPAIRABLE_SUBTITLE_CODES = new Set([
   "SUBTITLE_DURATION_TOO_LONG",
 ]);
 
-export interface ProposedAction {
-  type: string;
-  risk: "R0" | "R1" | "R2" | "R3";
-  input: Record<string, unknown>;
-}
+export type ProposedAction = ReleaseEvaluationAction;
 
 export interface OrchestrationRunResult {
   findings: NewFinding[];
@@ -54,102 +51,11 @@ export class DeterministicOrchestrationService implements OrchestrationService {
   ) {}
 
   async validateRelease(release: ReleaseDetailDto): Promise<NewFinding[]> {
-    const ruleSet = this.ruleSet(release);
-    const findings: NewFinding[] = [];
-    const video = this.latest(release, "VIDEO");
-    const subtitle = this.latestSubtitle(release, "SRT");
-    const rights = this.latest(release, "RIGHTS");
-
-    if (!video) findings.push(this.finding("VIDEO_REQUIRED", "BLOCKER", "A video asset is required", "asset-manifest"));
-    if (!subtitle) {
-      findings.push(this.finding("SUBTITLE_REQUIRED", "BLOCKER", `A ${release.language} SRT subtitle is required`, "asset-manifest"));
-    } else {
-      const validation = validateSrt(await this.readText(subtitle, "subtitle"), this.validationOptions(release, ruleSet));
-      findings.push(...validation.findings.map((finding) => this.finding(
-        finding.code,
-        finding.severity,
-        finding.message,
-        "subtitle",
-        {
-          ...finding.evidence,
-          assetId: subtitle.id,
-          ...(finding.cueIndex === undefined ? {} : { cueIndex: finding.cueIndex }),
-        },
-        REPAIRABLE_SUBTITLE_CODES.has(finding.code) ? "REPAIR_SUBTITLE" : undefined,
-      )));
-      if (ruleSet.subtitleFormat === "TTML" && !this.hasTtmlChild(release, subtitle.id)) {
-        findings.push(this.finding(
-          "TTML_REQUIRED",
-          "BLOCKER",
-          "OTT delivery requires a TTML child for the latest SRT",
-          "subtitle-package",
-          { assetId: subtitle.id },
-          "GENERATE_TTML",
-        ));
-      }
-    }
-
-    if (!rights) {
-      findings.push(this.finding("RIGHTS_UNKNOWN", "BLOCKER", "Rights window is missing", "rights-window", { territory: release.territory }));
-    } else {
-      const document = this.rightsDocument(await this.readText(rights, "rights"));
-      if (!document) {
-        findings.push(this.finding("RIGHTS_UNKNOWN", "BLOCKER", "Rights window is unavailable", "rights-window", { assetId: rights.id, territory: release.territory }));
-      } else {
-        const evaluationAt = this.now();
-        let result: ReturnType<typeof checkRightsWindow> | undefined;
-        try {
-          result = checkRightsWindow({
-            territory: release.territory,
-            evaluationAt,
-            warningWindowHours: ruleSet.rightsWarningWindowHours,
-            ...document,
-          });
-        } catch {
-          findings.push(this.finding(
-            "RIGHTS_UNKNOWN",
-            "BLOCKER",
-            "Rights window is unavailable",
-            "rights-window",
-            { assetId: rights.id, territory: release.territory, evaluationAt },
-          ));
-        }
-        if (result && result.status !== "VALID") {
-          findings.push(this.finding(
-            `RIGHTS_${result.status}`,
-            result.status === "EXPIRING_SOON" ? "WARNING" : "BLOCKER",
-            result.status === "EXPIRING_SOON"
-              ? `Rights expire in ${result.remainingHours} hours`
-              : `Rights are ${result.status.toLowerCase().replace("_", " ")}`,
-            "rights-window",
-            { assetId: rights.id, territory: release.territory, evaluationAt, remainingHours: result.remainingHours, validFrom: result.validFrom, validUntil: result.validUntil },
-          ));
-        }
-      }
-    }
-    return findings;
+    return (await evaluateRelease(await this.evaluationInput(release))).findings;
   }
 
   async runRelease(release: ReleaseDetailDto): Promise<OrchestrationRunResult> {
-    const ruleSet = this.ruleSet(release);
-    const findings = await this.validateRelease(release);
-    const source = this.latestSubtitle(release, "SRT");
-    const blockers = findings.filter(({ severity }) => severity === "BLOCKER");
-    const sourceBlockers = source
-      ? findings.filter(({ severity, source: findingSource, evidence }) => severity === "BLOCKER" && findingSource === "subtitle" && evidence?.assetId === source.id)
-      : [];
-    const ttmlRequired = source
-      ? blockers.find(({ code, evidence }) => code === "TTML_REQUIRED" && evidence?.assetId === source.id)
-      : undefined;
-    const unhandledBlocker = blockers.some((finding) => !sourceBlockers.includes(finding) && finding !== ttmlRequired);
-
-    if (source && sourceBlockers.length > 0 && !unhandledBlocker && sourceBlockers.every(({ code }) => REPAIRABLE_SUBTITLE_CODES.has(code))) {
-      return { findings, proposedAction: this.assetAction("REPAIR_SUBTITLE", source, ruleSet) };
-    }
-    if (source && sourceBlockers.length === 0 && ttmlRequired && !unhandledBlocker) {
-      return { findings, proposedAction: this.assetAction("GENERATE_TTML", source, ruleSet) };
-    }
-    return { findings };
+    return evaluateRelease(await this.evaluationInput(release));
   }
 
   async executeAction(action: ActionDto, release: ReleaseDetailDto): Promise<OrchestrationExecutionResult> {
@@ -201,21 +107,6 @@ export class DeterministicOrchestrationService implements OrchestrationService {
   async submitDelivery(delivery: DeliveryAttemptDto): Promise<{ requestId: string; response: Record<string, unknown> }> {
     const requestId = `sandbox_${createHash("sha256").update(delivery.id).digest("hex").slice(0, 16)}`;
     return { requestId, response: { accepted: true, adapter: "sandbox", submittedAt: new Date().toISOString() } };
-  }
-
-  private assetAction(type: "REPAIR_SUBTITLE" | "GENERATE_TTML", source: AssetDto, ruleSet: RuleSetDefinition): ProposedAction {
-    return {
-      type,
-      risk: "R1",
-      input: {
-        assetId: source.id,
-        sourceSha256: source.sha256,
-        fileName: source.fileName,
-        language: source.language,
-        ruleSetId: ruleSet.id,
-        ruleSetVersion: ruleSet.version,
-      },
-    };
   }
 
   private validationOptions(release: ReleaseDetailDto, ruleSet: RuleSetDefinition): SubtitleValidationOptions {
@@ -273,30 +164,36 @@ export class DeterministicOrchestrationService implements OrchestrationService {
     }
   }
 
-  private rightsDocument(content: string): { validFrom: string; validUntil: string } | undefined {
-    let value: unknown;
-    try {
-      value = JSON.parse(content);
-    } catch {
-      return undefined;
-    }
-    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-    const document = value as Record<string, unknown>;
-    if (Object.keys(document).some((field) => field !== "validFrom" && field !== "validUntil")
-      || typeof document.validFrom !== "string" || typeof document.validUntil !== "string") {
-      return undefined;
-    }
-    return { validFrom: document.validFrom, validUntil: document.validUntil };
-  }
-
-  private finding(
-    code: string,
-    severity: NewFinding["severity"],
-    message: string,
-    source: string,
-    evidence: Record<string, unknown> = {},
-    suggestedAction?: string,
-  ): NewFinding {
-    return { code, severity, message, source, evidence, suggestedAction, status: "OPEN" };
+  private async evaluationInput(release: ReleaseDetailDto) {
+    const ruleSet = this.ruleSet(release);
+    const video = this.latest(release, "VIDEO");
+    const subtitle = this.latestSubtitle(release, "SRT");
+    const rights = this.latest(release, "RIGHTS");
+    const durationMs = this.mediaDurationMs(release);
+    return {
+      release: { id: release.id, language: release.language, territory: release.territory },
+      ruleSet: {
+        id: ruleSet.id,
+        version: ruleSet.version,
+        cpsLimit: ruleSet.cpsLimit,
+        subtitleFormat: ruleSet.subtitleFormat,
+        rightsWarningWindowHours: ruleSet.rightsWarningWindowHours,
+      },
+      evaluationAt: this.now(),
+      assets: {
+        ...(video ? { video: { id: video.id, ...(durationMs === undefined ? {} : { durationMs }) } } : {}),
+        ...(subtitle ? {
+          subtitle: {
+            id: subtitle.id,
+            sha256: subtitle.sha256,
+            ...(subtitle.language ? { language: subtitle.language } : {}),
+            fileName: subtitle.fileName,
+            content: await this.readText(subtitle, "subtitle"),
+            hasTtmlChild: this.hasTtmlChild(release, subtitle.id),
+          },
+        } : {}),
+        ...(rights ? { rights: { id: rights.id, content: await this.readText(rights, "rights") } } : {}),
+      },
+    };
   }
 }
