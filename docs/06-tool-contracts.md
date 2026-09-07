@@ -26,6 +26,8 @@
 ```text
 POST   /auth/demo-login
 GET    /auth/me
+GET    /health
+GET    /health/ready
 POST   /releases
 GET    /releases/:id
 POST   /releases/:id/assets
@@ -47,6 +49,8 @@ GET    /settings
 ```
 
 除 `GET /health` 与受限的 `POST /auth/demo-login` 外，接口均要求 `Authorization: Bearer <JWT>`。JWT 的 `sub`、`roles` 与 `projectIds` 是服务端授权事实；客户端提交的 actor、角色或项目范围不能覆盖它们。
+
+`GET /health` 只检查 API 进程存活；`GET /health/ready` 会检查当前存储依赖，PostgreSQL 不可访问时返回 `503 Service Unavailable`。两者都不要求 JWT，以便部署平台探测。
 
 `POST /auth/demo-login` 只用于本地演示：必须显式设置 `DEMO_AUTH_ENABLED=true`，并且在 `NODE_ENV=production` 时固定返回 404。它只接受服务端内置 persona，签发 1 小时会话且响应使用 `Cache-Control: no-store`。
 

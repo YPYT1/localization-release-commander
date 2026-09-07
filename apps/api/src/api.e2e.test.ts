@@ -173,6 +173,7 @@ test("demo approvers have distinct fixed subjects and cannot inject roles", asyn
 test("health is public while release data requires a bearer token", async () => {
   await withApi(async (baseUrl) => {
     assert.equal((await globalThis.fetch(`${baseUrl}/health`)).status, 200);
+    assert.equal((await globalThis.fetch(`${baseUrl}/health/ready`)).status, 200);
     assert.equal((await globalThis.fetch(`${baseUrl}/releases`)).status, 401);
     assert.equal((await globalThis.fetch(`${baseUrl}/releases`, { headers: { authorization: "Bearer invalid.token.value" } })).status, 401);
   });

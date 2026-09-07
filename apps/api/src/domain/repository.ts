@@ -131,6 +131,7 @@ export function isAssetMutableState(state: ReleaseState): boolean {
 }
 
 export interface ReleaseRepository {
+  healthCheck(): Promise<void>;
   createProject(name: string): Promise<ProjectDto>;
   getProject(id: string): Promise<ProjectDto | undefined>;
   createRelease(input: CreateReleaseInput & { projectId: string }): Promise<ReleaseRecord>;

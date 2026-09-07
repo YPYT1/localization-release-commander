@@ -28,3 +28,8 @@ flowchart LR
 ## 运行模式
 
 API 与 Worker 分离部署；开发环境可单进程运行。生产使用 PostgreSQL 持久化状态，Redis 仅作队列，不作为事实来源。
+
+## 运行探针
+
+- `GET /health` 是存活探针：只证明 HTTP 进程可以响应，不访问依赖。
+- `GET /health/ready` 是就绪探针：调用当前 Repository 的 `healthCheck`。内存模式立即就绪；PostgreSQL 模式执行 `SELECT 1`。依赖不可用时返回 503，负载均衡器不应把流量导向该实例。

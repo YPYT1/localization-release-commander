@@ -211,7 +211,7 @@ pnpm --filter @lrc/api test
 - 工作台尚未完成 Release 搜索、状态/平台筛选、上传进度显示、断点续传和全部稳定错误码。
 - Action/Approval/Delivery 已有幂等、原子 claim、提交前复验和本地收尾恢复；租约超时、transactional outbox 仍是后续生产化工作。
 - 100 包评测集、离线回放、质量指标和真实端到端验收证据尚未完成。
-- OpenTelemetry、指标/追踪/告警、数据库 readiness、独立 CORS frontend origin、容器镜像和完整部署流水线尚未落地。
+- OpenTelemetry、指标/追踪/告警、独立 CORS frontend origin、容器镜像和完整部署流水线尚未落地。
 - LLM 规范解释、Finding 聚类和文案辅助尚未接入；当前系统刻意保持确定性且不依赖模型。
 
 实现路线见[实施计划](PLAN.md)与[评测计划](docs/08-evaluation.md)。

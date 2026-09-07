@@ -156,6 +156,10 @@ const RUN_COLUMNS = `id, release_id AS "releaseId", graph_version AS "graphVersi
 export class PostgresReleaseRepository implements ReleaseRepository {
   constructor(private readonly pool: Pool, private readonly ownsPool = false) {}
 
+  async healthCheck(): Promise<void> {
+    await this.pool.query("SELECT 1");
+  }
+
   async onApplicationShutdown(): Promise<void> {
     if (this.ownsPool) await this.pool.end();
   }

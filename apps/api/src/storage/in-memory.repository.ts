@@ -44,6 +44,8 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
   private readonly audit = new Map<string, AuditEventDto>();
   private readonly runs = new Map<string, WorkflowRunRecord>();
 
+  async healthCheck(): Promise<void> {}
+
   async createProject(name: string): Promise<ProjectDto> {
     const project = { id: randomUUID(), name, createdAt: new Date().toISOString() };
     this.projects.set(project.id, project);
