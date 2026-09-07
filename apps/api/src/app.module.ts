@@ -21,6 +21,7 @@ import { AssetInspectionService, FFPROBE_RUNNER, FfprobeService, nodeCommandRunn
 import { AssetService } from "./asset.service.js";
 import { UploadAssetGuard } from "./upload-asset.guard.js";
 import { ApiExceptionFilter } from "./api-exception.filter.js";
+import { InternalWorkerController } from "./internal-worker.controller.js";
 
 @Module({
   imports: [
@@ -36,7 +37,7 @@ import { ApiExceptionFilter } from "./api-exception.filter.js";
       },
     }),
   ],
-  controllers: [HealthController, AuthController, ReleasesController, AssetsController, ReadModelController, ActionsController, DeliveriesController],
+  controllers: [HealthController, AuthController, ReleasesController, AssetsController, ReadModelController, ActionsController, DeliveriesController, InternalWorkerController],
   providers: [
     ReleaseService,
     ReleaseWorkflowService,
