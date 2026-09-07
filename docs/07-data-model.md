@@ -15,7 +15,7 @@ audit_events(id, release_id, type, actor, payload_json, occurred_at)
 workflow_runs(id, release_id, graph_version, checkpoint_json, status)
 ```
 
-`workflow_runs` 已实现。目标中的 `workflow_jobs` 及 transactional outbox 尚未落库；字段和事务边界见[API 与 Worker 的持久化交接](15-durable-execution-handoff.md)，在迁移完成前不能把它们列为现有核心表。
+`workflow_runs` 已实现，并含 `work_type`、`attempt`、`lease_owner` 和 `lease_expires_at` 用于 `EVALUATE_RELEASE` 的持久化领取与恢复。MVP 不另建 `workflow_jobs`；transactional outbox、Redis/BullMQ 和其他长路径仍未落库，边界见[API 与 Worker 的持久化交接](15-durable-execution-handoff.md)。
 
 ## 文件原则
 

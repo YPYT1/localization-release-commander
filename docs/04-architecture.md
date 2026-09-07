@@ -13,7 +13,7 @@ flowchart LR
     worker[独立 Worker 进程待接入]
 ```
 
-当前 API 同步执行 QC、动作和 sandbox 提交。`apps/worker` 的 LangGraph 纯计算图已由 API 调用，但尚未作为独立进程领取任务或持久化 checkpoint；对象存储、Redis/BullMQ、模型、真实平台和 OpenTelemetry 均未实现。
+当前 API 同步执行动作和 sandbox 提交；`EVALUATE_RELEASE` 已由独立 `apps/worker` 进程通过 API 领取、在 LangGraph 中执行并回写结果。`workflow_runs` 保存租约、attempt 和 checkpoint；对象存储、Redis/BullMQ、模型、真实平台和 OpenTelemetry 均未实现。
 
 ## 目标架构
 
@@ -30,7 +30,7 @@ flowchart LR
 
 ## 运行模式
 
-当前 API 与 Worker 代码可分别构建，但长流程还未真正转移给 Worker。目标是分离部署，使用 PostgreSQL 持久化状态，Redis 仅作队列唤醒，不作为事实来源。
+API 与 Worker 已可分别构建和部署；当前只有 `EVALUATE_RELEASE` 转移给 Worker。后续长路径同样使用 PostgreSQL 持久化状态，Redis 仅作队列唤醒，不作为事实来源。
 
 ## 运行探针
 

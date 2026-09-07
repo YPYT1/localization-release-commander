@@ -4,7 +4,7 @@
 
 使用 LangGraph.js 作为“可恢复工作流层”，使用 LangChain.js 的模型和工具适配能力；不使用自由循环的通用 AgentExecutor 作为核心业务流程。
 
-当前已接入的 `apps/worker/src/release-evaluation.ts` 是一个两节点 LangGraph 纯计算图：先校验冻结的 SRT、版权文本和 RuleSet，再生成可绑定源资产 SHA-256 的修复/TTML 建议。API 调用它后才持久化 Finding、Action、Release state 和 AuditEvent。它尚未是独立队列 Worker，也没有生产 checkpointer；该交接由[持久化交接](15-durable-execution-handoff.md)定义。
+当前 `apps/worker/src/release-evaluation.ts` 是一个两节点 LangGraph 纯计算图：先校验冻结的 SRT、版权文本和 RuleSet，再生成可绑定源资产 SHA-256 的修复/TTML 建议。独立 Worker 通过内部 API 领取 `EVALUATE_RELEASE`，执行该图，再由 API 持久化 Finding、Action、Release state 和 AuditEvent。它使用 `workflow_runs` 的 PostgreSQL lease/attempt/checkpoint 恢复；其他长路径尚未迁移，交接边界见[持久化交接](15-durable-execution-handoff.md)。
 
 ## 为什么需要 Graph
 

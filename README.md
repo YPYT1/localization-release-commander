@@ -48,7 +48,7 @@ flowchart LR
   web --> api[NestJS API]
   api --> db[(PostgreSQL)]
   api --> assets[(Mounted asset directory)]
-  api -. pending queue integration .-> worker[LangGraph Worker]
+  worker[LangGraph Worker] -. lease + result .-> api
   worker --> qc[packages/qc]
   worker --> provider[Deterministic provider adapter]
 ```
@@ -209,7 +209,7 @@ pnpm --filter @lrc/api test
 - API QC 已由锁定 RuleSet 和不可变资产字节驱动；缺失/损坏 RIGHTS、SRT 修复和 OTT TTML 派生资产均有确定性门禁与回归测试。
 - 平台 Adapter 是确定性模拟器，尚未接入真实 YouTube/OTT provider、webhook、凭证轮换和限流策略。
 - 工作台尚未完成断点续传。
-- Action/Approval/Delivery 已有幂等、原子 claim、提交前复验和本地收尾恢复；租约超时、transactional outbox 仍是后续生产化工作。
+- Action/Approval/Delivery 已有幂等、原子 claim、提交前复验和本地收尾恢复；`EVALUATE_RELEASE` 已有租约超时重领，transactional outbox 与其他长路径仍是后续生产化工作。
 - 100 包评测集、离线回放、质量指标和真实端到端验收证据尚未完成。
 - OpenTelemetry、指标/追踪/告警、镜像注册和完整部署流水线尚未落地。
 - LLM 规范解释、Finding 聚类和文案辅助尚未接入；当前系统刻意保持确定性且不依赖模型。
