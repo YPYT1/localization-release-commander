@@ -15,6 +15,8 @@ audit_events(id, release_id, type, actor, payload_json, occurred_at)
 workflow_runs(id, release_id, graph_version, checkpoint_json, status)
 ```
 
+`workflow_runs` 已实现。目标中的 `workflow_jobs` 及 transactional outbox 尚未落库；字段和事务边界见[API 与 Worker 的持久化交接](15-durable-execution-handoff.md)，在迁移完成前不能把它们列为现有核心表。
+
 ## 文件原则
 
 原始资产不可覆盖；修复生成新版本并记录父资产。对象存储只保存加密文件，数据库保存 URI、哈希和结构化元数据。

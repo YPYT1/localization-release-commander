@@ -234,6 +234,7 @@ pnpm --filter @lrc/api test
 | [功能模块](docs/12-functional-modules.md) | 可验收功能规格 |
 | [前端构建契约](docs/13-frontend-build-contract.md) | 页面、组件和数据契约 |
 | [仓库与部署结构](docs/14-repository-deployment.md) | 单仓库、多部署单元决策 |
+| [持久化交接](docs/15-durable-execution-handoff.md) | API/Worker 单一写入、checkpoint 与可靠派发设计 |
 | [ADR 索引](docs/adr/README.md) | 关键架构决策 |
 
 ## 贡献
