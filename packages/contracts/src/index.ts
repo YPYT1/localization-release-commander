@@ -150,6 +150,12 @@ export interface WorkflowResultDto {
   action?: ActionDto | null;
 }
 
+export interface QueuedWorkflowDto {
+  releaseId: string;
+  runId: string;
+  state: "VALIDATING";
+}
+
 export interface HealthDto {
   service: "api";
   status: "ok";

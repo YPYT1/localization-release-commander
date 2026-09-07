@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseListPageDto, WorkflowResultDto } from "@lrc/contracts";
+import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, QueuedWorkflowDto, ReleaseDetailDto, ReleaseListPageDto, WorkflowResultDto } from "@lrc/contracts";
 import { DtoValidationPipe, parseCreateAsset, parseCreateRelease, type ValidatedAssetInput } from "./dto-validation.js";
 import { ReleaseService } from "./release.service.js";
 import { AssetService } from "./asset.service.js";
@@ -90,5 +90,14 @@ export class ReleasesController {
     @CurrentPrincipal() principal: AuthPrincipal,
   ): Promise<WorkflowResultDto> {
     return this.workflow.runRelease(id, principal);
+  }
+
+  @Post(":id/queue")
+  @RequireRoles("Operator")
+  queue(
+    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @CurrentPrincipal() principal: AuthPrincipal,
+  ): Promise<QueuedWorkflowDto> {
+    return this.workflow.queueRelease(id, principal);
   }
 }

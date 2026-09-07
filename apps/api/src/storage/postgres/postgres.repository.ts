@@ -40,6 +40,7 @@ import {
   type ReleaseListPageOptions,
   type ReleaseRepository,
   type WorkflowClaim,
+  type QueuedWorkflow,
   type WorkflowRunRecord,
 } from "../../domain/repository.js";
 
@@ -716,7 +717,7 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     return result.rows[0] ? this.workflowRun(result.rows[0]) : undefined;
   }
 
-  async claimWorkflow(releaseId: string, graphVersion: string): Promise<WorkflowClaim | undefined> {
+  async claimWorkflow(releaseId: string, graphVersion: string, queued?: QueuedWorkflow): Promise<WorkflowClaim | undefined> {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -734,8 +735,9 @@ export class PostgresReleaseRepository implements ReleaseRepository {
         return undefined;
       }
       const runResult = await client.query<WorkflowRunRow>(
-        `INSERT INTO workflow_runs(id, release_id, graph_version, status) VALUES ($1, $2, $3, 'RUNNING') RETURNING ${RUN_COLUMNS}`,
-        [randomUUID(), releaseId, graphVersion],
+        `INSERT INTO workflow_runs(id, release_id, graph_version, work_type, checkpoint_json, status)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING ${RUN_COLUMNS}`,
+        [randomUUID(), releaseId, graphVersion, queued?.type ?? null, JSON.stringify(queued?.checkpoint ?? {}), queued ? "WAITING" : "RUNNING"],
       );
       const claimedRelease = await client.query<ReleaseRow>(
         `UPDATE releases SET state = 'VALIDATING', version = version + 1, updated_at = now() WHERE id = $1 RETURNING ${RELEASE_COLUMNS}`,

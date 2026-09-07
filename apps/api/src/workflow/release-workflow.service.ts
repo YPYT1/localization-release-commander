@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ConflictException, HttpException, Inject, Injectable, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
-import type { ActionDto, ApprovalDecision, ApprovalDto, DeliveryAttemptDto, ReleaseDetailDto, ReleaseState, WorkflowResultDto } from "@lrc/contracts";
+import type { ActionDto, ApprovalDecision, ApprovalDto, DeliveryAttemptDto, QueuedWorkflowDto, ReleaseDetailDto, ReleaseState, WorkflowResultDto } from "@lrc/contracts";
 import { RELEASE_REPOSITORY, type NewAction, type ReleaseRepository } from "../domain/repository.js";
 import { ORCHESTRATION_SERVICE, type OrchestrationRunResult, type OrchestrationService } from "./orchestration.js";
 import type { AuthPrincipal } from "../auth/auth.js";
@@ -43,6 +43,17 @@ export class ReleaseWorkflowService {
     } catch (error) {
       return this.failRun(releaseId, run.id, claim.version, claim.previousState, error, actor);
     }
+  }
+
+  async queueRelease(releaseId: string, principal: AuthPrincipal): Promise<QueuedWorkflowDto> {
+    await this.requireRunnableRelease(releaseId, principal);
+    const claim = await this.repository.claimWorkflow(releaseId, "worker-evaluation-v1", {
+      type: "EVALUATE_RELEASE",
+      checkpoint: { schemaVersion: 1, type: "EVALUATE_RELEASE", actorId: principal.id },
+    });
+    if (!claim) throw new ConflictException("Release workflow is already running");
+    await this.audit(releaseId, "workflow.queued", principal.id, { runId: claim.run.id, type: "EVALUATE_RELEASE" });
+    return { releaseId, runId: claim.run.id, state: "VALIDATING" };
   }
 
   async runRelease(releaseId: string, principal: AuthPrincipal): Promise<WorkflowResultDto> {

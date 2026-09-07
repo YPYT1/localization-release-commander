@@ -32,6 +32,7 @@ import {
   ReleaseRecord,
   ReleaseRepository,
   type WorkflowClaim,
+  type QueuedWorkflow,
   WorkflowRunRecord,
 } from "../domain/repository.js";
 
@@ -365,12 +366,16 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
     return copy(claimed);
   }
 
-  async claimWorkflow(releaseId: string, graphVersion: string): Promise<WorkflowClaim | undefined> {
+  async claimWorkflow(releaseId: string, graphVersion: string, queued?: QueuedWorkflow): Promise<WorkflowClaim | undefined> {
     const release = this.releases.get(releaseId);
     if (!release) return undefined;
     if ([...this.runs.values()].some((run) => run.releaseId === releaseId && run.graphVersion === graphVersion && run.status === "RUNNING")) return undefined;
     const now = new Date().toISOString();
-    const run: WorkflowRunRecord = { id: randomUUID(), releaseId, graphVersion, checkpoint: {}, status: "RUNNING", attempt: 0, createdAt: now, updatedAt: now };
+    const run: WorkflowRunRecord = {
+      id: randomUUID(), releaseId, graphVersion, checkpoint: copy(queued?.checkpoint ?? {}),
+      ...(queued ? { type: queued.type, status: "WAITING" as const } : { status: "RUNNING" as const }),
+      attempt: 0, createdAt: now, updatedAt: now,
+    };
     const claimed = this.nextRelease(release, "VALIDATING");
     this.runs.set(run.id, run);
     this.releases.set(releaseId, claimed);
