@@ -396,6 +396,8 @@ button { border: 0; }
 .form-feedback.success { border-color: var(--success); color: var(--success); }
 .inline-action-form { display: flex; align-items: center; gap: 12px; }
 .inline-action-form .form-feedback { max-width: 320px; margin: 0; }
+.inline-action-group { display: flex; align-items: center; gap: 12px; }
+.release-command-bar > .inline-action-group { flex-direction: row; }
 .release-header { display: flex; justify-content: space-between; gap: 40px; align-items: end; padding-bottom: 32px; }
 .release-header h1 { margin: 13px 0 8px; font-family: var(--serif); font-size: clamp(49px, 5.3vw, 82px); font-weight: 400; line-height: .93; letter-spacing: -.055em; }
 .release-header p { margin: 0; color: var(--muted-paper); font-size: 10px; }

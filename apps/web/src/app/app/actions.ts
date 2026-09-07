@@ -57,6 +57,15 @@ export async function runReleaseAction(releaseId: string, _state: FormState, _fo
   return { status: "success", message: `Run ${result.data.runId} 完成，状态 ${result.data.state}。` };
 }
 
+export async function queueReleaseAction(releaseId: string, _state: FormState, _formData: FormData): Promise<FormState> {
+  const denied = await authorize("Operator");
+  if (denied) return denied;
+  const result = await api.queueRelease(releaseId);
+  if (!result.ok) return { status: "error", message: result.message };
+  refreshRelease(releaseId);
+  return { status: "success", message: `Run ${result.data.runId} 已排队，等待 Worker 领取。` };
+}
+
 function refreshRelease(releaseId: string) {
   revalidatePath("/app");
   revalidatePath("/app/releases");

@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useActionState, useRef, useState, type FormEvent } from "react";
-import { createReleaseAction, decideActionAction, deliveryAction, executeActionAction, runReleaseAction, type FormState } from "@/app/app/actions";
+import { createReleaseAction, decideActionAction, deliveryAction, executeActionAction, queueReleaseAction, runReleaseAction, type FormState } from "@/app/app/actions";
 import type { AuthPrincipal, RuleSetDto } from "@/lib/api";
 
 const initialFormState: FormState = { status: "idle", message: "" };
@@ -125,6 +125,12 @@ export function RunReleaseButton({ releaseId }: { releaseId: string }) {
   const bound = runReleaseAction.bind(null, releaseId);
   const [state, action, pending] = useActionState(bound, initialFormState);
   return <form className="inline-action-form" action={action}><button className="primary-button" disabled={pending}>{pending ? "正在运行…" : "运行交付检查"}</button><Feedback state={state} /></form>;
+}
+
+export function QueueReleaseButton({ releaseId }: { releaseId: string }) {
+  const bound = queueReleaseAction.bind(null, releaseId);
+  const [state, action, pending] = useActionState(bound, initialFormState);
+  return <form className="inline-action-form" action={action}><button className="quiet-button" disabled={pending}>{pending ? "正在排队…" : "交给后台 Worker"}</button><Feedback state={state} /></form>;
 }
 
 export function ExecuteActionForm({ actionId, releaseId }: { actionId: string; releaseId: string }) {

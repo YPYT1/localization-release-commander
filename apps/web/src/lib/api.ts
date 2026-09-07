@@ -15,6 +15,7 @@ import type {
   ReleaseDetailDto,
   ReleaseListPageDto,
   ReleaseSummaryDto,
+  QueuedWorkflowDto,
   WorkflowResultDto,
 } from "@lrc/contracts";
 
@@ -163,6 +164,7 @@ export const api = {
   ruleSets: () => listRequest<RuleSetDto>("/rulesets", "rulesets"),
   createRelease: (input: CreateReleasePayload) => request<ReleaseSummaryDto>("/releases", { method: "POST", body: JSON.stringify(input) }),
   runRelease: (releaseId: string) => request<WorkflowResultDto>(`/releases/${encodeURIComponent(releaseId)}/run`, { method: "POST" }),
+  queueRelease: (releaseId: string) => request<QueuedWorkflowDto>(`/releases/${encodeURIComponent(releaseId)}/queue`, { method: "POST" }),
   executeAction: (actionId: string) => request<ActionDto>(`/actions/${encodeURIComponent(actionId)}/execute`, { method: "POST" }),
   decideAction: (actionId: string, decision: "approve" | "reject", reason: string) => request<ApprovalDto>(`/actions/${encodeURIComponent(actionId)}/${decision}`, { method: "POST", body: JSON.stringify({ reason }) }),
   submitDelivery: (deliveryId: string, retry = false) => request<DeliveryAttemptDto>(`/deliveries/${encodeURIComponent(deliveryId)}/${retry ? "retry" : "submit"}`, { method: "POST" }),
