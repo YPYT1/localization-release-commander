@@ -25,7 +25,10 @@ import {
   NewFinding,
   NewAssetRecord,
   NewSubmission,
+  ReleaseListCursor,
   ReleaseListFilter,
+  ReleaseListPage,
+  ReleaseListPageOptions,
   ReleaseRecord,
   ReleaseRepository,
   type WorkflowClaim,
@@ -78,15 +81,15 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
   }
 
   async listReleases(projectIds?: readonly string[], filter: ReleaseListFilter = {}): Promise<ReleaseSummaryDto[]> {
-    const search = filter.search?.toLocaleLowerCase();
-    return [...this.releases.values()]
-      .filter((release) => projectIds === undefined || projectIds.includes(release.projectId))
-      .filter((release) => !search || release.id.toLocaleLowerCase().includes(search) || release.episode.toLocaleLowerCase().includes(search))
-      .filter((release) => !filter.state || release.state === filter.state)
-      .filter((release) => !filter.platform || release.platform === filter.platform)
-      .filter((release) => !filter.territory || release.territory === filter.territory)
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map(({ id, episode, territory, platform, language, state, updatedAt }) => copy({ id, episode, territory, platform, language, state, updatedAt }));
+    return this.filterReleases(projectIds, filter).map((release) => this.releaseSummary(release));
+  }
+
+  async listReleasePage(projectIds: readonly string[] | undefined, options: ReleaseListPageOptions): Promise<ReleaseListPage> {
+    const releases = this.filterReleases(projectIds, options).filter((release) => !options.cursor || this.isAfterCursor(release, options.cursor));
+    const page = releases.slice(0, options.limit + 1);
+    const items = page.slice(0, options.limit).map((release) => this.releaseSummary(release));
+    const last = items.at(-1);
+    return { items, ...(page.length > options.limit && last ? { nextCursor: { updatedAt: last.updatedAt, id: last.id } } : {}) };
   }
 
   async getReleaseRecord(id: string): Promise<ReleaseRecord | undefined> {
@@ -392,5 +395,24 @@ export class InMemoryReleaseRepository implements ReleaseRepository {
 
   private nextRelease(release: ReleaseRecord, state: ReleaseState): ReleaseRecord {
     return { ...release, state, version: release.version + 1, updatedAt: new Date().toISOString() };
+  }
+
+  private filterReleases(projectIds: readonly string[] | undefined, filter: ReleaseListFilter): ReleaseRecord[] {
+    const search = filter.search?.toLowerCase();
+    return [...this.releases.values()]
+      .filter((release) => projectIds === undefined || projectIds.includes(release.projectId))
+      .filter((release) => !search || release.id.toLowerCase().includes(search) || release.episode.toLowerCase().includes(search))
+      .filter((release) => !filter.state || release.state === filter.state)
+      .filter((release) => !filter.platform || release.platform === filter.platform)
+      .filter((release) => !filter.territory || release.territory === filter.territory)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id));
+  }
+
+  private isAfterCursor(release: ReleaseRecord, cursor: ReleaseListCursor): boolean {
+    return release.updatedAt < cursor.updatedAt || (release.updatedAt === cursor.updatedAt && release.id < cursor.id);
+  }
+
+  private releaseSummary({ id, episode, territory, platform, language, state, updatedAt }: ReleaseRecord): ReleaseSummaryDto {
+    return copy({ id, episode, territory, platform, language, state, updatedAt });
   }
 }

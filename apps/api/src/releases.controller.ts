@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Query, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseSummaryDto, WorkflowResultDto } from "@lrc/contracts";
+import type { AssetDto, AuditEventDto, CreateReleaseInput, FindingDto, ReleaseDetailDto, ReleaseListPageDto, WorkflowResultDto } from "@lrc/contracts";
 import { DtoValidationPipe, parseCreateAsset, parseCreateRelease, type ValidatedAssetInput } from "./dto-validation.js";
 import { ReleaseService } from "./release.service.js";
 import { AssetService } from "./asset.service.js";
@@ -22,8 +22,8 @@ export class ReleasesController {
   }
 
   @Get()
-  list(@CurrentPrincipal() principal: AuthPrincipal, @Query() query: Record<string, string | undefined>): Promise<ReleaseSummaryDto[]> {
-    return this.releases.listReleases(principal, query);
+  list(@CurrentPrincipal() principal: AuthPrincipal, @Query() query: Record<string, string | undefined>): Promise<ReleaseListPageDto> {
+    return this.releases.listReleasePage(principal, query);
   }
 
   @Get(":id")

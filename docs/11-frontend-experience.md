@@ -86,4 +86,4 @@
 
 ## 前端数据边界
 
-Next.js 只消费 NestJS DTO；不直接读数据库、不执行 ffprobe、不持有平台 token。列表接口支持 cursor 分页和 `updatedAt` 增量刷新。
+Next.js 只消费 NestJS DTO；不直接读数据库、不执行 ffprobe、不持有平台 token。Release 列表按 `updatedAt + id` cursor 向后翻页，切换任一筛选条件时清除 cursor；窗口重新聚焦后以新的首页快照刷新。

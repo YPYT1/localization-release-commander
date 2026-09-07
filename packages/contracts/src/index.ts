@@ -46,6 +46,11 @@ export interface ReleaseSummaryDto {
   updatedAt: string;
 }
 
+export interface ReleaseListPageDto {
+  items: ReleaseSummaryDto[];
+  nextCursor?: string;
+}
+
 export interface ProjectDto {
   id: string;
   name: string;

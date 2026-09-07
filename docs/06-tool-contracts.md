@@ -54,7 +54,9 @@ GET    /settings
 
 Web 服务端通过 `API_URL` 访问 NestJS；API 的跨域策略仅使用 `CORS_ORIGINS`，其值为逗号分隔的绝对 HTTP(S) browser origin，例如 `https://console.example.com,https://staging-console.example.com`。不接受 API 地址、通配符或带路径的 URL。
 
-`GET /releases` 支持 `projectId`、`search`、`state`、`platform`、`territory` 查询参数。`search` 仅匹配 Release ID 或集数；其余三个条件精确匹配。所有条件都在项目授权过滤之后生效，调用者不能通过查询参数看到无权项目的 Release；未知状态、平台或非法地区返回 400。
+`GET /releases` 支持 `projectId`、`search`、`state`、`platform`、`territory`、`limit`、`cursor` 查询参数。`search` 仅匹配 Release ID 或集数；其余三个条件精确匹配。所有条件都在项目授权过滤之后生效，调用者不能通过查询参数看到无权项目的 Release；未知状态、平台、非法地区、`limit` 或 `cursor` 返回 400。
+
+列表响应为 `{ "items": ReleaseSummary[], "nextCursor"?: "opaque" }`。按 `updatedAt DESC, id DESC` 返回；`cursor` 是服务端编码的 `updatedAt + id` keyset 边界，客户端不得解析或构造。省略 `limit` 时返回 50 项，最大 100 项；要读取下一页，保留原筛选条件并携带 `nextCursor`。
 
 `POST /auth/demo-login` 只用于本地演示：必须显式设置 `DEMO_AUTH_ENABLED=true`，并且在 `NODE_ENV=production` 时固定返回 404。它只接受服务端内置 persona，签发 1 小时会话且响应使用 `Cache-Control: no-store`。
 

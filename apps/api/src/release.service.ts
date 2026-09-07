@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { releaseStates, type AuditEventDto, type CreateReleaseInput, type FindingDto, type Platform, type ReleaseDetailDto, type ReleaseState, type ReleaseSummaryDto } from "@lrc/contracts";
-import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseListFilter, type ReleaseRepository } from "./domain/repository.js";
+import { releaseStates, type AuditEventDto, type CreateReleaseInput, type FindingDto, type Platform, type ReleaseDetailDto, type ReleaseListPageDto, type ReleaseState, type ReleaseSummaryDto } from "@lrc/contracts";
+import { RELEASE_REPOSITORY, type AuditFilter, type ReleaseListCursor, type ReleaseListFilter, type ReleaseListPageOptions, type ReleaseRepository } from "./domain/repository.js";
 import { getRuleSet, RULE_SETS } from "./rulesets.js";
 import type { AuthPrincipal } from "./auth/auth.js";
 import { ProjectAccessService } from "./auth/project-access.service.js";
@@ -42,6 +42,14 @@ export class ReleaseService {
       return this.repository.listReleases([query.projectId], filter);
     }
     return this.repository.listReleases(this.access.projectFilter(principal), filter);
+  }
+
+  async listReleasePage(principal: AuthPrincipal, query: Record<string, string | undefined>): Promise<ReleaseListPageDto> {
+    const options = this.parseReleasePageOptions(query);
+    const page = query.projectId
+      ? (this.access.assertProject(principal, query.projectId), await this.repository.listReleasePage([query.projectId], options))
+      : await this.repository.listReleasePage(this.access.projectFilter(principal), options);
+    return { items: page.items, ...(page.nextCursor ? { nextCursor: this.encodeReleaseCursor(page.nextCursor) } : {}) };
   }
 
   getRelease(id: string, principal: AuthPrincipal): Promise<ReleaseDetailDto> {
@@ -118,6 +126,29 @@ export class ReleaseService {
       ...(platform ? { platform: platform as Platform } : {}),
       ...(territory ? { territory } : {}),
     };
+  }
+
+  private parseReleasePageOptions(query: Record<string, string | undefined>): ReleaseListPageOptions {
+    const limit = query.limit === undefined ? 50 : Number(query.limit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new BadRequestException("limit must be an integer between 1 and 100");
+    return { ...this.parseReleaseFilter(query), limit, ...(query.cursor ? { cursor: this.decodeReleaseCursor(query.cursor) } : {}) };
+  }
+
+  private decodeReleaseCursor(cursor: string): ReleaseListCursor {
+    try {
+      const value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Partial<ReleaseListCursor>;
+      if (typeof value.updatedAt !== "string" || Number.isNaN(Date.parse(value.updatedAt))
+        || typeof value.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.id)) {
+        throw new Error("invalid cursor");
+      }
+      return { updatedAt: new Date(value.updatedAt).toISOString(), id: value.id };
+    } catch {
+      throw new BadRequestException("cursor is invalid");
+    }
+  }
+
+  private encodeReleaseCursor(cursor: ReleaseListCursor): string {
+    return Buffer.from(JSON.stringify(cursor)).toString("base64url");
   }
 
   private auditSummary(event: AuditEventDto): string {

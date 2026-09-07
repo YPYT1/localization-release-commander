@@ -11,6 +11,7 @@ import type {
   FindingDto,
   HealthDto,
   ReleaseDetailDto,
+  ReleaseListPageDto,
   ReleaseSummaryDto,
   WorkflowResultDto,
 } from "@lrc/contracts";
@@ -137,6 +138,14 @@ async function listRequest<T>(path: string, key: string): Promise<ApiResult<T[]>
   return result.ok ? { ok: true, data: normalizeList<T>(result.data, key) } : result;
 }
 
+async function pageRequest<T>(path: string): Promise<ApiResult<{ items: T[]; nextCursor?: string }>> {
+  const result = await request<unknown>(path);
+  if (!result.ok) return result;
+  if (!result.data || typeof result.data !== "object" || Array.isArray(result.data)) return { ok: true, data: { items: [] } };
+  const page = result.data as ReleaseListPageDto;
+  return { ok: true, data: { items: Array.isArray(page.items) ? page.items as T[] : [], ...(typeof page.nextCursor === "string" ? { nextCursor: page.nextCursor } : {}) } };
+}
+
 const currentPrincipal = cache(() => request<AuthPrincipal>("/auth/me"));
 
 export const api = {
@@ -144,6 +153,7 @@ export const api = {
   demoLogin: (persona: DemoPersona, projectId?: string) => request<DemoLoginDto>("/auth/demo-login", { method: "POST", body: JSON.stringify({ persona, ...(projectId ? { projectId } : {}) }) }, false),
   me: currentPrincipal,
   releases: (query = "") => listRequest<ReleaseSummaryDto>(`/releases${query}`, "releases"),
+  releasePage: (query = "") => pageRequest<ReleaseSummaryDto>(`/releases${query}`),
   release: (releaseId: string) => request<ReleaseDetailDto>(`/releases/${encodeURIComponent(releaseId)}`),
   findings: (releaseId: string) => listRequest<FindingDto>(`/releases/${encodeURIComponent(releaseId)}/findings`, "findings"),
   timeline: (releaseId: string) => listRequest<TimelineEventDto>(`/releases/${encodeURIComponent(releaseId)}/timeline`, "events"),

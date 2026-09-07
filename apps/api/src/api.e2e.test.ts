@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
-import type { ActionDto, ApprovalDto, AssetDto, DeliveryAttemptDto, ReleaseDetailDto, ReleaseSummaryDto, WorkflowResultDto } from "@lrc/contracts";
+import type { ActionDto, ApprovalDto, AssetDto, DeliveryAttemptDto, ReleaseDetailDto, ReleaseListPageDto, ReleaseSummaryDto, WorkflowResultDto } from "@lrc/contracts";
 import { AppModule } from "./app.module.js";
 import type { AuthPrincipal } from "./auth/auth.js";
 import { signTestToken } from "./auth/testing.js";
@@ -198,8 +198,8 @@ test("roles and project membership isolate every release read and write", async 
     assert.equal((await fetch(`${baseUrl}/audit?releaseId=${foreign.id}`, {}, operator)).status, 403);
     assert.equal((await fetch(`${baseUrl}/settings`, {}, operator)).status, 403);
 
-    const visible = (await (await fetch(`${baseUrl}/releases`, {}, operator)).json()) as ReleaseSummaryDto[];
-    assert.deepEqual(visible.map(({ id }) => id), [own.id]);
+    const visible = (await (await fetch(`${baseUrl}/releases`, {}, operator)).json()) as ReleaseListPageDto;
+    assert.deepEqual(visible.items.map(({ id }) => id), [own.id]);
 
     const created = await fetch(`${baseUrl}/releases`, {
       method: "POST",
@@ -327,8 +327,8 @@ test("a release can be created and listed", async () => {
 
     const listResponse = await fetch(`${baseUrl}/releases`);
     assert.equal(listResponse.status, 200);
-    const releases = (await listResponse.json()) as ReleaseSummaryDto[];
-    assert.deepEqual(releases.map(({ id }) => id), [created.id]);
+    const releases = (await listResponse.json()) as ReleaseListPageDto;
+    assert.deepEqual(releases.items.map(({ id }) => id), [created.id]);
   });
 });
 
@@ -344,12 +344,21 @@ test("release listing applies authorized search, state, platform, and territory 
       return response.json() as Promise<ReleaseSummaryDto>;
     };
     const matched = await create("Alpha pilot", "US", "YOUTUBE");
-    await create("Bravo pilot", "JP", "OTT");
+    const second = await create("Bravo pilot", "JP", "OTT");
+    const third = await create("Charlie pilot", "US", "YOUTUBE");
 
-    const filtered = (await (await fetch(`${baseUrl}/releases?search=alpha&state=DRAFT&platform=YOUTUBE&territory=us`)).json()) as ReleaseSummaryDto[];
-    assert.deepEqual(filtered.map(({ id }) => id), [matched.id]);
+    const filtered = (await (await fetch(`${baseUrl}/releases?search=alpha&state=DRAFT&platform=YOUTUBE&territory=us`)).json()) as ReleaseListPageDto;
+    assert.deepEqual(filtered.items.map(({ id }) => id), [matched.id]);
+    const firstPage = (await (await fetch(`${baseUrl}/releases?limit=2`)).json()) as ReleaseListPageDto;
+    assert.equal(firstPage.items.length, 2);
+    assert.ok(firstPage.nextCursor);
+    const secondPage = (await (await fetch(`${baseUrl}/releases?limit=2&cursor=${encodeURIComponent(firstPage.nextCursor!)}`)).json()) as ReleaseListPageDto;
+    assert.deepEqual(new Set([...firstPage.items, ...secondPage.items].map(({ id }) => id)), new Set([matched.id, second.id, third.id]));
+    assert.equal(secondPage.nextCursor, undefined);
     assert.equal((await fetch(`${baseUrl}/releases?state=UNKNOWN`)).status, 400);
     assert.equal((await fetch(`${baseUrl}/releases?territory=U1`)).status, 400);
+    assert.equal((await fetch(`${baseUrl}/releases?limit=101`)).status, 400);
+    assert.equal((await fetch(`${baseUrl}/releases?cursor=not-a-cursor`)).status, 400);
   });
 });
 

@@ -94,6 +94,21 @@ export interface ReleaseListFilter {
   territory?: string;
 }
 
+export interface ReleaseListCursor {
+  updatedAt: string;
+  id: string;
+}
+
+export interface ReleaseListPage {
+  items: ReleaseSummaryDto[];
+  nextCursor?: ReleaseListCursor;
+}
+
+export interface ReleaseListPageOptions extends ReleaseListFilter {
+  limit: number;
+  cursor?: ReleaseListCursor;
+}
+
 export interface AssetAuditContext {
   actor: string;
   sizeBytes: number;
@@ -143,6 +158,7 @@ export interface ReleaseRepository {
   getProject(id: string): Promise<ProjectDto | undefined>;
   createRelease(input: CreateReleaseInput & { projectId: string }): Promise<ReleaseRecord>;
   listReleases(projectIds?: readonly string[], filter?: ReleaseListFilter): Promise<ReleaseSummaryDto[]>;
+  listReleasePage(projectIds: readonly string[] | undefined, options: ReleaseListPageOptions): Promise<ReleaseListPage>;
   getReleaseRecord(id: string): Promise<ReleaseRecord | undefined>;
   getRelease(id: string): Promise<ReleaseDetailDto | undefined>;
   updateReleaseState(id: string, state: ReleaseState): Promise<ReleaseRecord | undefined>;

@@ -36,6 +36,8 @@ import {
   type NewSubmission,
   type ReleaseRecord,
   type ReleaseListFilter,
+  type ReleaseListPage,
+  type ReleaseListPageOptions,
   type ReleaseRepository,
   type WorkflowClaim,
   type WorkflowRunRecord,
@@ -188,6 +190,23 @@ export class PostgresReleaseRepository implements ReleaseRepository {
   }
 
   async listReleases(projectIds?: readonly string[], filter: ReleaseListFilter = {}): Promise<ReleaseSummaryDto[]> {
+    const result = await this.listReleaseRows(projectIds, filter);
+    return result.map((row) => this.releaseSummary(row));
+  }
+
+  async listReleasePage(projectIds: readonly string[] | undefined, options: ReleaseListPageOptions): Promise<ReleaseListPage> {
+    const rows = await this.listReleaseRows(projectIds, options, options.cursor, options.limit + 1);
+    const page = rows.slice(0, options.limit).map((row) => this.releaseSummary(row));
+    const last = page.at(-1);
+    return { items: page, ...(rows.length > options.limit && last ? { nextCursor: { updatedAt: last.updatedAt, id: last.id } } : {}) };
+  }
+
+  private async listReleaseRows(
+    projectIds: readonly string[] | undefined,
+    filter: ReleaseListFilter,
+    cursor?: { updatedAt: string; id: string },
+    limit?: number,
+  ): Promise<ReleaseRow[]> {
     if (projectIds?.length === 0) return [];
     const values: unknown[] = [];
     const clauses: string[] = [];
@@ -203,9 +222,14 @@ export class PostgresReleaseRepository implements ReleaseRepository {
     if (filter.state) add("state = ?", filter.state);
     if (filter.platform) add("platform = ?", filter.platform);
     if (filter.territory) add("territory = ?", filter.territory);
+    if (cursor) {
+      values.push(cursor.updatedAt, cursor.id);
+      clauses.push(`(updated_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
+    }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const result = await this.pool.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases ${where} ORDER BY updated_at DESC, id`, values);
-    return result.rows.map((row) => this.releaseSummary(row));
+    const pagination = limit === undefined ? "" : (() => { values.push(limit); return ` LIMIT $${values.length}`; })();
+    const result = await this.pool.query<ReleaseRow>(`SELECT ${RELEASE_COLUMNS} FROM releases ${where} ORDER BY updated_at DESC, id DESC${pagination}`, values);
+    return result.rows;
   }
 
   async getReleaseRecord(id: string): Promise<ReleaseRecord | undefined> {
